@@ -18,7 +18,7 @@ Keys.addonName = ADDON_NAME
 ----------------------------------------------------------------------
 
 local DEFAULTS = {
-  bnStatus = false,      -- broadcast key start to your Battle.net custom message
+  bnStatus = true,       -- broadcast key start to your Battle.net custom message
 }
 Keys.DEFAULTS = DEFAULTS
 
