@@ -40,8 +40,22 @@ local function formatStartBroadcast()
   local s = Keys.state
   if not s.keyTimeLimit then return nil end
 
-  local h, m = GetGameTime()             -- realm/server time
+  local h, m = GetGameTime()             -- realm/server time (current)
   if h == nil or m == nil then return nil end
+
+  -- If we have a persisted epoch (real start time), back-compute the start
+  -- hour/minute from elapsed minutes. This makes /zzk refresh and any
+  -- post-/reload broadcast show the actual start time instead of "now".
+  if ZugZugKeysDB._keyStartEpoch then
+    local elapsedSec = time() - ZugZugKeysDB._keyStartEpoch
+    if elapsedSec > 0 then
+      local elapsedMin = math.floor(elapsedSec / 60)
+      local startTotal = (h * 60 + m - elapsedMin) % (24 * 60)
+      if startTotal < 0 then startTotal = startTotal + 24 * 60 end
+      h = math.floor(startTotal / 60)
+      m = startTotal % 60
+    end
+  end
 
   local startStr = format12h(h, m)
   local totalMin = h * 60 + m + math.floor(s.keyTimeLimit / 60)
@@ -107,20 +121,23 @@ local function onKeyStart()
   -- so a recovery path can't accidentally fire a second broadcast with the
   -- wrong "Started:" timestamp.
   if ZugZugKeysDB._startBroadcastSent then return end
-  -- Only capture the user's prior message if we don't already have one stored.
-  -- This avoids overwriting it with our own "Done in X:YY" text if a second
-  -- key starts inside the previous key's RESTORE_DELAY window.
+  -- Compute the text first. If we can't build a valid broadcast (no key data
+  -- yet, /zzk refresh outside a key, etc.) bail out BEFORE touching state so
+  -- we don't capture a stale _prevBnMessage that'd later overwrite the real
+  -- user message.
+  local text = formatStartBroadcast()
+  if not text then return end
+  -- Capture the user's prior message now that we know we'll overwrite it.
+  -- Don't overwrite a previously-saved value (handles a second key starting
+  -- inside the previous key's RESTORE_DELAY window).
   if not ZugZugKeysDB._prevBnMessage then
     ZugZugKeysDB._prevBnMessage = readBnMessage()
   end
-  local text = formatStartBroadcast()
   if ZugZugKeysDB.mpDebug then
     print("|cffFFAA00ZZK key start broadcast:|r " .. tostring(text))
   end
-  if text then
-    setBnMessage(text)
-    ZugZugKeysDB._startBroadcastSent = true
-  end
+  setBnMessage(text)
+  ZugZugKeysDB._startBroadcastSent = true
 end
 
 local function onKeyComplete()
@@ -130,7 +147,10 @@ local function onKeyComplete()
   local weBroadcasted = ZugZugKeysDB._startBroadcastSent
   ZugZugKeysDB._startBroadcastSent = nil
 
-  if ZugZugKeysDB.bnStatus then
+  -- Only broadcast "Done in" if we also broadcasted "Started:" for this run.
+  -- Otherwise the completion message would appear without context (e.g. user
+  -- toggled bnStatus on mid-key) and we'd have no _prevBnMessage to restore.
+  if weBroadcasted and ZugZugKeysDB.bnStatus then
     local text = formatCompleteBroadcast()
     if text then setBnMessage(text) end
   end
