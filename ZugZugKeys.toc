@@ -11,4 +11,6 @@
 
 Core.lua
 Status.lua
+KeyInfo.lua
+FriendsList.lua
 Settings.lua

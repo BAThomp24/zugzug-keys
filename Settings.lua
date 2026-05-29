@@ -6,7 +6,7 @@
 
 local Keys = _G.ZugZugKeys
 
-local function CreateToggle(parent, x, y, label, dbKey, subtitle)
+local function CreateToggle(parent, x, y, label, dbKey, subtitle, onChange)
   local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
   cb:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
   cb.text = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -15,6 +15,7 @@ local function CreateToggle(parent, x, y, label, dbKey, subtitle)
   cb:SetChecked(ZugZugKeysDB[dbKey])
   cb:SetScript("OnClick", function(self)
     ZugZugKeysDB[dbKey] = self:GetChecked()
+    if onChange then onChange(self:GetChecked()) end
   end)
   return cb
 end
@@ -38,6 +39,30 @@ local function CreateSettingsPanel()
   local bnNote = canvas:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
   bnNote:SetPoint("TOPLEFT", bnToggle, "BOTTOMLEFT", 4, -2)
   bnNote:SetText("|cff666666Posts once at key start with start/estimated finish time. Restores your previous message after the key ends.|r")
+
+  -- Group key info
+  local infoToggle = CreateToggle(canvas, 16, -130, "Group Key Info", "groupKeyInfo",
+    "(small box showing group title + dungeon when you join via LFG)",
+    function() if Keys.UpdateGroupKeyInfoFeature then Keys.UpdateGroupKeyInfoFeature() end end)
+
+  local infoNote = canvas:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  infoNote:SetPoint("TOPLEFT", infoToggle, "BOTTOMLEFT", 4, -2)
+  infoNote:SetText("|cff666666Stays open even after the group disbands until you enter that instance, or close it manually.|r")
+
+  local lockToggle = CreateToggle(canvas, 32, -180, "Lock frame position", "groupKeyInfoLocked")
+
+  local resetBtn = CreateFrame("Button", nil, canvas, "UIPanelButtonTemplate")
+  resetBtn:SetSize(140, 22)
+  resetBtn:SetPoint("TOPLEFT", canvas, "TOPLEFT", 32, -210)
+  resetBtn:SetText("Reset Position")
+  resetBtn:SetScript("OnClick", function()
+    if Keys.ResetGroupKeyInfoPosition then Keys.ResetGroupKeyInfoPosition() end
+  end)
+
+  -- Friends list overlay
+  local flToggle = CreateToggle(canvas, 16, -260, "Friends List Overlay", "friendsListOverlay",
+    "(shows +level + estimated finish on friends running a ZugZug-broadcasted key)",
+    function() if Keys.RefreshFriendsListOverlay then Keys.RefreshFriendsListOverlay() end end)
 
   return canvas
 end
@@ -112,6 +137,30 @@ SlashCmdList["ZUGZUGKEYS"] = function(msg)
   if cmd == "status" then
     print("|cff8fbf3fZugZug Keys:|r feature toggles —")
     print("  BNet Status: " .. (ZugZugKeysDB.bnStatus and "|cff4DFF4Don|r" or "|cffFF6666off|r"))
+    print("  Group Key Info: " .. (ZugZugKeysDB.groupKeyInfo and "|cff4DFF4Don|r" or "|cffFF6666off|r"))
+    print("  Friends List Overlay: " .. (ZugZugKeysDB.friendsListOverlay and "|cff4DFF4Don|r" or "|cffFF6666off|r"))
+    return
+  end
+  if cmd == "friends" or cmd == "refreshfriends" then
+    if Keys.RefreshFriendsListOverlay then
+      Keys.RefreshFriendsListOverlay()
+      print("|cff8fbf3fZugZug Keys:|r friends list overlay refreshed")
+    end
+    return
+  end
+  if cmd == "friendsdebug" or cmd == "fdebug" then
+    if Keys.DumpFriendsListDebug then
+      Keys.DumpFriendsListDebug()
+    else
+      print("|cff8fbf3fZugZug Keys:|r friends debug unavailable")
+    end
+    return
+  end
+  if cmd == "hideinfo" or cmd == "closeinfo" then
+    if Keys.HideGroupKeyInfo then
+      Keys.HideGroupKeyInfo()
+      print("|cff8fbf3fZugZug Keys:|r group key info hidden")
+    end
     return
   end
   if cmd == "testbcast" or cmd == "testbroadcast" then
@@ -133,5 +182,8 @@ SlashCmdList["ZUGZUGKEYS"] = function(msg)
   print("  /zzk refresh   — re-fire the key-start broadcast for the current key")
   print("  /zzk forcebcast [text] — push text to BNet (works outside a key)")
   print("  /zzk testbcast — diagnose the BNet broadcast API")
+  print("  /zzk hideinfo  — close the group key info box")
+  print("  /zzk friends   — manually refresh the friends list overlay")
+  print("  /zzk friendsdebug — diagnose what UI is exposing in your client")
   print("  /zzk debug     — toggle verbose event logging")
 end

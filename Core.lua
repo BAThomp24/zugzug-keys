@@ -18,7 +18,11 @@ Keys.addonName = ADDON_NAME
 ----------------------------------------------------------------------
 
 local DEFAULTS = {
-  bnStatus = true,       -- broadcast key start to your Battle.net custom message
+  bnStatus = true,                  -- broadcast key start to your Battle.net custom message
+  groupKeyInfo = true,              -- show group-title/dungeon box when joining via LFG
+  groupKeyInfoLocked = true,        -- lock the group-info box against dragging
+  groupKeyInfoPosition = nil,       -- { point, relativePoint, x, y }
+  friendsListOverlay = true,        -- show +level/~finish overlay on BNet friends list
 }
 Keys.DEFAULTS = DEFAULTS
 
