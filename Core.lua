@@ -155,21 +155,24 @@ frame:SetScript("OnEvent", function(_, event, arg1, ...)
     local s = Keys.state
     if inInstance and instanceType == "party" then
       s.instanceEnterTime = s.instanceEnterTime or GetTime()
-      -- Recover key state if we reloaded mid-key
+      -- Recover key state if we reloaded mid-key.
+      -- Do NOT re-fire keyStart here — BNet's custom message persists across
+      -- our own /reloads, so re-broadcasting would just send a duplicate with
+      -- the wrong start time (the reload moment instead of the real start).
       if not s.inActiveKey then
         local ok, id = pcall(C_ChallengeMode.GetActiveChallengeMapID)
         if ok and Keys.safeNum(id) then
           captureKeyInfo()
-          -- Fire keyStart so feature modules can do their setup (broadcast
-          -- ticker, etc.) when we recover into an already-running key.
-          Keys.fire("keyStart")
         end
       end
     else
       s.instanceEnterTime = nil
       s.inActiveKey = false
       s.keyStartTime = nil
-      -- Outside any dungeon → refresh the cache
+      -- Outside any dungeon → clear any stale start-broadcast flag so the
+      -- next real key start can broadcast (e.g. previous key was abandoned
+      -- without firing CHALLENGE_MODE_COMPLETED or _RESET).
+      ZugZugKeysDB._startBroadcastSent = nil
       cacheMapInfo()
     end
     return

@@ -94,15 +94,23 @@ end
 
 local function onKeyStart()
   if not ZugZugKeysDB.bnStatus then return end
+  -- Dedupe: only broadcast once per active key run. Persists across /reload
+  -- so a recovery path can't accidentally fire a second broadcast with the
+  -- wrong "Started:" timestamp.
+  if ZugZugKeysDB._startBroadcastSent then return end
   prevBnMessage = readBnMessage()
   local text = formatStartBroadcast()
   if ZugZugKeysDB.mpDebug then
     print("|cffFFAA00ZZK key start broadcast:|r " .. tostring(text))
   end
-  if text then setBnMessage(text) end
+  if text then
+    setBnMessage(text)
+    ZugZugKeysDB._startBroadcastSent = true
+  end
 end
 
 local function onKeyComplete()
+  ZugZugKeysDB._startBroadcastSent = nil
   if not ZugZugKeysDB.bnStatus then return end
   local text = formatCompleteBroadcast()
   if text then setBnMessage(text) end
@@ -115,6 +123,7 @@ local function onKeyComplete()
 end
 
 local function onKeyReset()
+  ZugZugKeysDB._startBroadcastSent = nil
   if not ZugZugKeysDB.bnStatus then return end
   if prevBnMessage then setBnMessage(prevBnMessage) end
   prevBnMessage = nil
@@ -128,8 +137,10 @@ Keys.on("keyReset",    onKeyReset)
 -- Exposed for /zzk commands
 ----------------------------------------------------------------------
 
---- Re-fire the start broadcast on demand (uses current key state).
+--- Re-fire the start broadcast on demand (uses current key state). Clears
+--- the dedupe flag first so /zzk refresh always re-sends, even mid-key.
 function Keys.refreshStatus()
+  ZugZugKeysDB._startBroadcastSent = nil
   onKeyStart()
 end
 
