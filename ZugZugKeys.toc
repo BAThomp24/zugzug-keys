@@ -13,4 +13,6 @@ Core.lua
 Status.lua
 KeyInfo.lua
 FriendsList.lua
+LustData.lua
+LustReminder.lua
 Settings.lua

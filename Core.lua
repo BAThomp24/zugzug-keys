@@ -23,6 +23,12 @@ local DEFAULTS = {
   groupKeyInfoLocked = true,        -- lock the group-info box against dragging
   groupKeyInfoPosition = nil,       -- { point, relativePoint, x, y }
   friendsListOverlay = true,        -- show +level/~finish overlay on BNet friends list
+  -- Lust Reminder
+  lustReminder = false,             -- master toggle (off by default — opt-in via /zzk settings)
+  lustReminderLeadPct = 3,          -- fire alert when current forces % >= target - lead
+  lustReminderSound = true,         -- play a sound on alert
+  lustReminderCuratedFallback = true, -- use curated boss-N fallback when MDT route has no marker
+  lustReminderDebug = false,        -- chat-print diagnostic info
 }
 Keys.DEFAULTS = DEFAULTS
 

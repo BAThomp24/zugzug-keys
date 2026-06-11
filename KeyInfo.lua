@@ -16,6 +16,125 @@ local pendingApps = {}
 local widget    -- the visible frame (created lazily)
 
 ----------------------------------------------------------------------
+-- Teleport spell discovery
+-- We auto-discover M+ teleport spells from the player's spellbook by
+-- matching spell names against the dungeon's name (the same way the
+-- player would search "Path of Saron" / "Teleport: Pit of Saron" / etc.).
+-- The mapping is cached on PLAYER_LOGIN and refreshed when the spellbook
+-- changes (e.g. learning a new teleport).
+----------------------------------------------------------------------
+
+-- [lowercased dungeon name] = spellID
+local teleportByDungeonLower = {}
+-- [mapID] = spellID  (filled best-effort from the same scan)
+local teleportByMapID = {}
+
+local function normalizeDungeonName(name)
+  if type(name) ~= "string" then return "" end
+  local s = name:lower()
+  s = s:gsub("'", ""):gsub("[%p]", " "):gsub("%s+", " ")
+  s = s:gsub("^%s", ""):gsub("%s$", "")
+  return s
+end
+
+--- Iterate every M+ challenge map name once so we can match against
+--- spellbook entries. Returns { mapID = normalized name }.
+local function getChallengeDungeonNames()
+  local out = {}
+  if not (C_ChallengeMode and C_ChallengeMode.GetMapTable) then return out end
+  local ok, maps = pcall(C_ChallengeMode.GetMapTable)
+  if not ok or type(maps) ~= "table" then return out end
+  for _, mapID in ipairs(maps) do
+    local okI, name = pcall(C_ChallengeMode.GetMapUIInfo, mapID)
+    if okI and type(name) == "string" and name ~= "" then
+      out[mapID] = normalizeDungeonName(name)
+    end
+  end
+  return out
+end
+
+--- Walk the player's spellbook and bind dungeon names to teleport spell
+--- IDs. Match heuristic: the spell name contains the dungeon name as a
+--- substring (after normalising punctuation). We also require the spell
+--- name to contain a teleport-flavour keyword ("path", "teleport", "warp")
+--- so we don't false-match other dungeon-themed spells.
+local function discoverTeleports()
+  teleportByDungeonLower = {}
+  teleportByMapID = {}
+
+  local dungeons = getChallengeDungeonNames()
+  if next(dungeons) == nil then return end
+
+  -- Spellbook iteration uses the modern C_SpellBook namespace where
+  -- available; the legacy API name still exists in 12.0 as a fallback.
+  if not C_SpellBook or not C_SpellBook.GetNumSpellBookSkillLines
+      or not C_SpellBook.GetSpellBookSkillLineInfo
+      or not C_SpellBook.GetSpellBookItemInfo
+      or not Enum or not Enum.SpellBookSpellBank then
+    return
+  end
+
+  local bank = Enum.SpellBookSpellBank.Player
+  local lineCount = C_SpellBook.GetNumSpellBookSkillLines()
+  for line = 1, (lineCount or 0) do
+    local lineOk, lineInfo = pcall(C_SpellBook.GetSpellBookSkillLineInfo, line)
+    if lineOk and type(lineInfo) == "table"
+        and type(lineInfo.numSpellBookItems) == "number"
+        and type(lineInfo.itemIndexOffset) == "number" then
+      for i = 1, lineInfo.numSpellBookItems do
+        local slot = lineInfo.itemIndexOffset + i
+        local infoOk, info = pcall(C_SpellBook.GetSpellBookItemInfo, slot, bank)
+        if infoOk and type(info) == "table" and info.spellID
+            and type(info.name) == "string" and info.name ~= "" then
+          local lowerName = normalizeDungeonName(info.name)
+          if lowerName:find("path", 1, true)
+              or lowerName:find("teleport", 1, true)
+              or lowerName:find("warp", 1, true) then
+            for mapID, dName in pairs(dungeons) do
+              if dName ~= "" and lowerName:find(dName, 1, true) then
+                teleportByDungeonLower[dName] = info.spellID
+                teleportByMapID[mapID] = info.spellID
+                break
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
+--- Resolve a snapshot to a teleport spell ID, or nil.
+local function teleportSpellIDForSnap(snap)
+  if type(snap) ~= "table" then return nil end
+  if snap.mapID and teleportByMapID[snap.mapID] then
+    return teleportByMapID[snap.mapID]
+  end
+  if type(snap.dungeon) == "string" then
+    local norm = normalizeDungeonName(snap.dungeon)
+    return teleportByDungeonLower[norm]
+  end
+  return nil
+end
+
+--- Returns true if the spell is currently usable (known + off CD).
+local function isTeleportReady(spellID)
+  if not spellID then return false end
+  if IsPlayerSpell and not IsPlayerSpell(spellID)
+      and IsSpellKnown and not IsSpellKnown(spellID) then
+    return false
+  end
+  if C_Spell and C_Spell.GetSpellCooldown then
+    local info = C_Spell.GetSpellCooldown(spellID)
+    if type(info) == "table" then
+      local remaining = (info.startTime or 0) + (info.duration or 0) - GetTime()
+      if (info.duration or 0) > 1.5 and remaining > 0.1 then return false end
+    end
+  end
+  return true
+end
+
+----------------------------------------------------------------------
 -- Frame
 ----------------------------------------------------------------------
 
@@ -113,6 +232,42 @@ local function buildFrame()
     f:Hide()
   end)
 
+  -- Teleport button — secure action button so it can cast a spell on click.
+  -- Hidden unless we've resolved the snapshot's dungeon to a known M+
+  -- teleport spell that's off cooldown.
+  f.teleport = CreateFrame("Button", "ZugZugKeysTeleportBtn", f,
+    "SecureActionButtonTemplate,BackdropTemplate")
+  f.teleport:SetSize(78, 20)
+  f.teleport:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 8)
+  f.teleport:RegisterForClicks("AnyDown", "AnyUp")
+  if f.teleport.SetBackdrop then
+    f.teleport:SetBackdrop({
+      bgFile   = "Interface\\Buttons\\WHITE8x8",
+      edgeFile = "Interface\\Buttons\\WHITE8x8",
+      edgeSize = 1,
+    })
+    f.teleport:SetBackdropColor(0.40, 0.52, 0.18, 0.35)
+    f.teleport:SetBackdropBorderColor(0.56, 0.75, 0.25, 0.85)
+  end
+  f.teleport.text = f.teleport:CreateFontString(nil, "OVERLAY")
+  f.teleport.text:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
+  f.teleport.text:SetPoint("CENTER")
+  f.teleport.text:SetText("Teleport")
+  f.teleport.text:SetTextColor(1, 0.96, 0.74)
+  f.teleport:SetScript("OnEnter", function(self)
+    self:SetBackdropColor(0.56, 0.75, 0.25, 0.55)
+    if self.spellID then
+      GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+      GameTooltip:SetSpellByID(self.spellID)
+      GameTooltip:Show()
+    end
+  end)
+  f.teleport:SetScript("OnLeave", function(self)
+    self:SetBackdropColor(0.40, 0.52, 0.18, 0.35)
+    GameTooltip:Hide()
+  end)
+  f.teleport:Hide()
+
   -- Drag handlers (no-op if locked)
   f:RegisterForDrag("LeftButton")
   f:SetScript("OnDragStart", function(self)
@@ -134,6 +289,30 @@ local function ensureWidget()
   return widget
 end
 
+--- Refresh the teleport button's visibility + bound spell. Combat-safe:
+--- we only mutate secure attributes outside lockdown. When in combat we
+--- leave the button state as-is and let the next out-of-combat refresh
+--- catch up.
+local function refreshTeleportButton()
+  if not widget or not widget.teleport then return end
+  local btn = widget.teleport
+  if InCombatLockdown() then return end
+
+  local snap = ZugZugKeysDB.pendingKeyInfo
+  local spellID = snap and teleportSpellIDForSnap(snap)
+  if spellID and isTeleportReady(spellID) then
+    btn:SetAttribute("type", "spell")
+    btn:SetAttribute("spell", spellID)
+    btn.spellID = spellID
+    btn:Show()
+  else
+    btn:SetAttribute("type", nil)
+    btn:SetAttribute("spell", nil)
+    btn.spellID = nil
+    btn:Hide()
+  end
+end
+
 local function showSnapshot(snap)
   if not snap then return end
   ZugZugKeysDB.pendingKeyInfo = snap
@@ -141,6 +320,7 @@ local function showSnapshot(snap)
   w.title:SetText(snap.title and snap.title ~= "" and snap.title or "[no title]")
   w.dungeon:SetText(snap.dungeon or "")
   w:Show()
+  refreshTeleportButton()
 end
 
 local function hideKeyInfo()
@@ -244,6 +424,10 @@ frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("LFG_LIST_APPLICATION_STATUS_UPDATED")
 frame:SetScript("OnEvent", function(_, event, ...)
   if event == "PLAYER_LOGIN" then
+    -- Discover M+ teleport spells lazily so a discovery failure can't
+    -- abort the rest of this handler. The popup must work even if no
+    -- teleport ever resolves.
+    pcall(discoverTeleports)
     -- Restore the box on reload if there's still a pending entry.
     if ZugZugKeysDB.groupKeyInfo and ZugZugKeysDB.pendingKeyInfo then
       showSnapshot(ZugZugKeysDB.pendingKeyInfo)
@@ -253,12 +437,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
   if event == "PLAYER_ENTERING_WORLD" then
     if isInTrackedInstance() then hideKeyInfo() end
+    pcall(refreshTeleportButton)
     return
   end
 
   if event == "LFG_LIST_APPLICATION_STATUS_UPDATED" then
-    if not ZugZugKeysDB.groupKeyInfo then return end
     local resultID, newStatus = ...
+    if not ZugZugKeysDB.groupKeyInfo then return end
     if not resultID then return end
     if newStatus == "applied" or newStatus == "invited" then
       pendingApps[resultID] = snapshotApplication(resultID) or pendingApps[resultID]
