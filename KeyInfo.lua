@@ -29,9 +29,34 @@ local teleportByDungeonLower = {}
 -- [mapID] = spellID  (filled best-effort from the same scan)
 local teleportByMapID = {}
 
+-- Spell ID table for current-season M+ dungeon teleports, keyed by the
+-- challenge mapID. Dynamic name-based discovery isn't possible in 12.0:
+--   * legacy global `GetSpellInfo` was removed
+--   * `C_Spell.GetSpellInfo(name)` only accepts numeric IDs
+--   * achievement-reward teleport spells don't show in C_SpellBook
+--     iteration either
+-- So we maintain this table by hand each season. Sourced from in-game
+-- spell tooltips (verified 2026-06-11 for Midnight Season 1). When a
+-- new season ships, the dungeon line-up and spell IDs change — update
+-- the entries here and the addon will discover them on next /reload.
+local TELEPORT_BY_MAPID = {
+  [402] = 393273,   -- Path of the Draconic Diploma (Algeth'ar Academy)
+  [239] = 1254551,  -- Path of Dark Dereliction     (Seat of the Triumvirate)
+  [556] = 1254555,  -- Path of Unyielding Blight    (Pit of Saron)
+  [161] = 159898,   -- Path of the Skies            (Skyreach)
+  [560] = 1254559,  -- Path of Cavernous Depths     (Maisara Caverns)
+  [559] = 1254563,  -- Path of the Fractured Core   (Nexus-Point Xenas)
+  [558] = 1254572,  -- Path of Devoted Magistry     (Magisters' Terrace)
+  [557] = 1254400,  -- Path of the Windrunners      (Windrunner Spire)
+}
+
 local function normalizeDungeonName(name)
   if type(name) ~= "string" then return "" end
   local s = name:lower()
+  -- LFG activity names often include a parenthetical suffix like
+  -- "Magisters' Terrace (Mythic Keystone)" — strip those so they
+  -- compare equal to the clean dungeon name from C_ChallengeMode.
+  s = s:gsub("%b()", "")
   s = s:gsub("'", ""):gsub("[%p]", " "):gsub("%s+", " ")
   s = s:gsub("^%s", ""):gsub("%s$", "")
   return s
@@ -53,53 +78,86 @@ local function getChallengeDungeonNames()
   return out
 end
 
---- Walk the player's spellbook and bind dungeon names to teleport spell
---- IDs. Match heuristic: the spell name contains the dungeon name as a
---- substring (after normalising punctuation). We also require the spell
---- name to contain a teleport-flavour keyword ("path", "teleport", "warp")
---- so we don't false-match other dungeon-themed spells.
+-- Words common to many dungeon names that, on their own, don't uniquely
+-- identify a single dungeon. We don't fuzzy-match on these.
+local TELEPORT_NAME_STOPWORDS = {
+  ["the"]=true, ["of"]=true, ["and"]=true, ["to"]=true,
+  ["pit"]=true, ["city"]=true, ["palace"]=true, ["chamber"]=true,
+  ["temple"]=true, ["court"]=true, ["dawn"]=true, ["dusk"]=true,
+  ["dark"]=true, ["high"]=true, ["lower"]=true, ["upper"]=true,
+  ["new"]=true, ["old"]=true, ["nexus"]=true, -- ambiguous: Nexus-Point Xenas
+  ["point"]=true,
+}
+
+--- Look up a spell ID from its display name. We try every API that
+--- accepts a name string — different ones work for different categories
+--- of spell (achievement rewards behave differently from class spells).
+local function spellIDFromName(name)
+  if type(name) ~= "string" or name == "" then return nil end
+  -- Legacy global. Returns 7 values; the spellID is the 7th return value
+  -- (or the last one across versions). Accepts a name string reliably.
+  if _G.GetSpellInfo then
+    local ok, _, _, _, _, _, _, spellID = pcall(GetSpellInfo, name)
+    if ok and type(spellID) == "number" and spellID > 0 then return spellID end
+  end
+  -- Modern Spell mixin — typically the canonical path in 12.0.
+  if _G.Spell and Spell.CreateFromSpellName then
+    local ok, spell = pcall(Spell.CreateFromSpellName, name)
+    if ok and spell and spell.GetSpellID then
+      local id = spell:GetSpellID()
+      if type(id) == "number" and id > 0 then return id end
+    end
+  end
+  -- New namespace fallback. Doesn't always accept names but worth a shot.
+  if C_Spell and C_Spell.GetSpellInfo then
+    local ok, info = pcall(C_Spell.GetSpellInfo, name)
+    if ok and type(info) == "table" and type(info.spellID) == "number"
+        and info.spellID > 0 then
+      return info.spellID
+    end
+  end
+  return nil
+end
+
+--- Best-effort check that the player owns a spell. Several APIs report
+--- ownership in different ways depending on how the spell was granted
+--- (learned, achievement reward, expansion-feature unlock, etc.) so we
+--- accept "owned" from any of them. As a last resort, a defined
+--- non-zero cooldown duration is a reliable signal — Blizzard only
+--- exposes CD for spells the player actually has.
+local function isSpellOwned(spellID)
+  if not spellID then return false end
+  if IsPlayerSpell and IsPlayerSpell(spellID) then return true end
+  if IsSpellKnown and IsSpellKnown(spellID) then return true end
+  if IsSpellKnown and IsSpellKnown(spellID, true) then return true end
+  if C_SpellBook and C_SpellBook.IsSpellInSpellBook
+      and C_SpellBook.IsSpellInSpellBook(spellID, Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0) then
+    return true
+  end
+  -- Cooldown-based fallback: a spell the player doesn't own returns a
+  -- duration of 0 from GetSpellCooldown. M+ teleports have a 4-hour CD,
+  -- so a non-trivial duration is a strong "owned" signal.
+  if C_Spell and C_Spell.GetSpellCooldown then
+    local info = C_Spell.GetSpellCooldown(spellID)
+    if type(info) == "table" and (info.duration or 0) > 60 then
+      return true
+    end
+  end
+  return false
+end
+
+--- Bind every `TELEPORT_BY_MAPID` entry that the player actually owns
+--- into the live lookup tables.
 local function discoverTeleports()
   teleportByDungeonLower = {}
   teleportByMapID = {}
 
   local dungeons = getChallengeDungeonNames()
-  if next(dungeons) == nil then return end
-
-  -- Spellbook iteration uses the modern C_SpellBook namespace where
-  -- available; the legacy API name still exists in 12.0 as a fallback.
-  if not C_SpellBook or not C_SpellBook.GetNumSpellBookSkillLines
-      or not C_SpellBook.GetSpellBookSkillLineInfo
-      or not C_SpellBook.GetSpellBookItemInfo
-      or not Enum or not Enum.SpellBookSpellBank then
-    return
-  end
-
-  local bank = Enum.SpellBookSpellBank.Player
-  local lineCount = C_SpellBook.GetNumSpellBookSkillLines()
-  for line = 1, (lineCount or 0) do
-    local lineOk, lineInfo = pcall(C_SpellBook.GetSpellBookSkillLineInfo, line)
-    if lineOk and type(lineInfo) == "table"
-        and type(lineInfo.numSpellBookItems) == "number"
-        and type(lineInfo.itemIndexOffset) == "number" then
-      for i = 1, lineInfo.numSpellBookItems do
-        local slot = lineInfo.itemIndexOffset + i
-        local infoOk, info = pcall(C_SpellBook.GetSpellBookItemInfo, slot, bank)
-        if infoOk and type(info) == "table" and info.spellID
-            and type(info.name) == "string" and info.name ~= "" then
-          local lowerName = normalizeDungeonName(info.name)
-          if lowerName:find("path", 1, true)
-              or lowerName:find("teleport", 1, true)
-              or lowerName:find("warp", 1, true) then
-            for mapID, dName in pairs(dungeons) do
-              if dName ~= "" and lowerName:find(dName, 1, true) then
-                teleportByDungeonLower[dName] = info.spellID
-                teleportByMapID[mapID] = info.spellID
-                break
-              end
-            end
-          end
-        end
-      end
+  for mapID, spellID in pairs(TELEPORT_BY_MAPID) do
+    if isSpellOwned(spellID) then
+      teleportByMapID[mapID] = spellID
+      local dName = dungeons[mapID]
+      if dName then teleportByDungeonLower[dName] = spellID end
     end
   end
 end
@@ -107,23 +165,37 @@ end
 --- Resolve a snapshot to a teleport spell ID, or nil.
 local function teleportSpellIDForSnap(snap)
   if type(snap) ~= "table" then return nil end
+  -- mapID match only works if the LFG activity's mapID happens to match
+  -- the challenge map ID, which usually isn't the case (LFG IDs are in
+  -- the 2000-3000 range, challenge IDs are smaller). Try it anyway,
+  -- then fall through to dungeon-name matching.
   if snap.mapID and teleportByMapID[snap.mapID] then
     return teleportByMapID[snap.mapID]
   end
   if type(snap.dungeon) == "string" then
     local norm = normalizeDungeonName(snap.dungeon)
-    return teleportByDungeonLower[norm]
+    -- Exact normalised match against the names we built at discovery.
+    if teleportByDungeonLower[norm] then return teleportByDungeonLower[norm] end
+    -- Substring fallback: an LFG listing might add extra qualifiers
+    -- ("Magisters' Terrace +20", etc.) that our parenthetical strip
+    -- doesn't catch. If either name contains the other, accept it.
+    for storedName, spellID in pairs(teleportByDungeonLower) do
+      if storedName ~= "" and (norm:find(storedName, 1, true)
+          or storedName:find(norm, 1, true)) then
+        return spellID
+      end
+    end
   end
   return nil
 end
 
 --- Returns true if the spell is currently usable (known + off CD).
+--- Uses the same multi-fallback ownership check as discoverTeleports so
+--- achievement-reward teleports — which fail IsPlayerSpell / IsSpellKnown
+--- in 12.0 — are still recognised here.
 local function isTeleportReady(spellID)
   if not spellID then return false end
-  if IsPlayerSpell and not IsPlayerSpell(spellID)
-      and IsSpellKnown and not IsSpellKnown(spellID) then
-    return false
-  end
+  if not isSpellOwned(spellID) then return false end
   if C_Spell and C_Spell.GetSpellCooldown then
     local info = C_Spell.GetSpellCooldown(spellID)
     if type(info) == "table" then
@@ -159,9 +231,15 @@ local function applyPosition()
   end
 end
 
+-- Frame heights: a compact version (title + dungeon text only) and a
+-- taller version when a teleport button is showing so the button has
+-- its own row without overlapping the dungeon name.
+local FRAME_HEIGHT_NO_BUTTON = 76
+local FRAME_HEIGHT_WITH_BUTTON = 108
+
 local function buildFrame()
   local f = CreateFrame("Frame", "ZugZugKeysGroupInfo", UIParent, "BackdropTemplate")
-  f:SetSize(380, 76)
+  f:SetSize(380, FRAME_HEIGHT_NO_BUTTON)
   f:SetClampedToScreen(true)
   f:SetMovable(true)
   f:SetFrameStrata("MEDIUM")
@@ -237,8 +315,8 @@ local function buildFrame()
   -- teleport spell that's off cooldown.
   f.teleport = CreateFrame("Button", "ZugZugKeysTeleportBtn", f,
     "SecureActionButtonTemplate,BackdropTemplate")
-  f.teleport:SetSize(78, 20)
-  f.teleport:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 8)
+  f.teleport:SetSize(110, 22)
+  f.teleport:SetPoint("BOTTOM", f, "BOTTOM", 0, 10)
   f.teleport:RegisterForClicks("AnyDown", "AnyUp")
   if f.teleport.SetBackdrop then
     f.teleport:SetBackdrop({
@@ -300,16 +378,31 @@ local function refreshTeleportButton()
 
   local snap = ZugZugKeysDB.pendingKeyInfo
   local spellID = snap and teleportSpellIDForSnap(snap)
-  if spellID and isTeleportReady(spellID) then
+  local ready = spellID and isTeleportReady(spellID)
+
+  if ZugZugKeysDB.groupKeyInfoDebug then
+    print(string.format(
+      "|cffff8800ZZK refreshTeleportButton:|r snap.mapID=%s  snap.dungeon=%q  spellID=%s  ready=%s",
+      tostring(snap and snap.mapID),
+      tostring(snap and snap.dungeon or ""),
+      tostring(spellID),
+      tostring(ready)))
+  end
+
+  if ready then
     btn:SetAttribute("type", "spell")
     btn:SetAttribute("spell", spellID)
     btn.spellID = spellID
     btn:Show()
+    -- Grow the parent frame so the centered button has its own row and
+    -- doesn't sit on top of the dungeon-name text.
+    widget:SetHeight(FRAME_HEIGHT_WITH_BUTTON)
   else
     btn:SetAttribute("type", nil)
     btn:SetAttribute("spell", nil)
     btn.spellID = nil
     btn:Hide()
+    widget:SetHeight(FRAME_HEIGHT_NO_BUTTON)
   end
 end
 
@@ -422,6 +515,14 @@ local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("LFG_LIST_APPLICATION_STATUS_UPDATED")
+-- Hide the popup when the player finishes casting the teleport — that's
+-- their explicit "I'm done with this popup" signal. We use a unit-filtered
+-- registration so the event ONLY fires for the player's own casts (no
+-- party-member noise), which is cheaper than registering globally and
+-- filtering on the unit string ourselves.
+if frame.RegisterUnitEvent then
+  frame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
+end
 frame:SetScript("OnEvent", function(_, event, ...)
   if event == "PLAYER_LOGIN" then
     -- Discover M+ teleport spells lazily so a discovery failure can't
@@ -456,6 +557,25 @@ frame:SetScript("OnEvent", function(_, event, ...)
         or newStatus == "timedout" or newStatus == "failed"
         or newStatus == "invitedeclined" then
       pendingApps[resultID] = nil
+    end
+    return
+  end
+
+  if event == "UNIT_SPELLCAST_SUCCEEDED" then
+    -- UNIT_SPELLCAST_SUCCEEDED fires with (unit, castGUID, spellID). We
+    -- registered with RegisterUnitEvent("...", "player"), so unit is
+    -- always "player" — no need to filter on it. Hide the popup when
+    -- the cast was one of the M+ teleports we know about (the same
+    -- table KeyInfo's teleport-button discovery uses), so a successful
+    -- teleport closes the box automatically.
+    local _, _, spellID = ...
+    if spellID and TELEPORT_BY_MAPID then
+      for _, teleSpellID in pairs(TELEPORT_BY_MAPID) do
+        if spellID == teleSpellID then
+          hideKeyInfo()
+          return
+        end
+      end
     end
     return
   end

@@ -149,9 +149,6 @@ local function onKeyStart()
       ZugZugKeysDB._prevBnMessage = current
     end
   end
-  if ZugZugKeysDB.mpDebug then
-    print("|cffFFAA00ZZK key start broadcast:|r " .. tostring(text))
-  end
   setBnMessage(text)
   ZugZugKeysDB._startBroadcastSent = true
 end
@@ -215,10 +212,3 @@ function Keys.refreshStatus()
   onKeyStart()
 end
 
---- Send arbitrary text via BNet, regardless of key state. Used by
---- /zzk forcebcast to verify the pipeline outside a key.
-function Keys.sendStatusNow(text)
-  if not text or text == "" or not ZugZugKeysDB.bnStatus then return false end
-  setBnMessage(truncate(text, BNET_MSG_MAX))
-  return true
-end

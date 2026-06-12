@@ -25,9 +25,23 @@ local Keys = _G.ZugZugKeys
 local LUST_LONG = { "lust", "bloodlust", "heroism", "warp", "drums" }
 local LUST_SHORT = { " bl ", " tw ", " hero ", " warp " }
 
+--- Negation patterns — notes like "Better to not lust here" or "skip
+--- bloodlust on this pull" should NOT match. We check these before the
+--- positive patterns so the negative case shorts out.
+local LUST_NEGATIONS = {
+  "not lust", "no lust", "skip lust", "skip bloodlust", "without lust",
+  "don't lust", "dont lust", "do not lust",
+  "no bl", "skip bl", "without bl",
+  "no hero", "no heroism", "skip hero", "skip heroism",
+  "better to not", -- common Tactyks idiom
+}
+
 local function isLustNote(text)
   if type(text) ~= "string" or text == "" then return false end
   local lower = text:lower()
+  for _, p in ipairs(LUST_NEGATIONS) do
+    if lower:find(p, 1, true) then return false end
+  end
   for _, p in ipairs(LUST_LONG) do
     if lower:find(p, 1, true) then return true end
   end
@@ -53,6 +67,25 @@ local function getDungeonIdx(preset)
   end
   if _G.MDT and MDT.db and MDT.db.global and type(MDT.db.global.currentDungeonIdx) == "number" then
     return MDT.db.global.currentDungeonIdx
+  end
+  return nil
+end
+
+--- Modern MDT (12.0+) accesses its DB via MDT:GetDB(), not MDT.db. The
+--- saved-variable backing store is `MythicDungeonToolsDB.global` per the
+--- Ace3 profile model, with presets at `db.presets[dungeonIdx]`.
+--- Declared BEFORE mdtMapIDForDungeon / mdtDungeonIdxForMapID because
+--- Lua resolves local references at parse time, not call time — leaving
+--- this further down made the callers fall through to a nil global.
+local function mdtGetDB()
+  if type(_G.MDT) ~= "table" then return nil end
+  if type(MDT.GetDB) == "function" then
+    local ok, db = pcall(MDT.GetDB, MDT)
+    if ok and type(db) == "table" then return db end
+  end
+  -- Last-resort fallback for older MDT shapes.
+  if type(MDT.db) == "table" and type(MDT.db.global) == "table" then
+    return MDT.db.global
   end
   return nil
 end
@@ -158,22 +191,6 @@ local function detectCurrentDungeonIdx()
   return nil, "no signal matched"
 end
 
---- Modern MDT (12.0+) accesses its DB via MDT:GetDB(), not MDT.db. The
---- saved-variable backing store is `MythicDungeonToolsDB.global` per the
---- Ace3 profile model, with presets at `db.presets[dungeonIdx]`.
-local function mdtGetDB()
-  if type(_G.MDT) ~= "table" then return nil end
-  if type(MDT.GetDB) == "function" then
-    local ok, db = pcall(MDT.GetDB, MDT)
-    if ok and type(db) == "table" then return db end
-  end
-  -- Last-resort fallback for older MDT shapes.
-  if type(MDT.db) == "table" and type(MDT.db.global) == "table" then
-    return MDT.db.global
-  end
-  return nil
-end
-
 --- Given an active key's challenge map ID, return the user's most-recent
 --- preset for that specific dungeon — even if MDT's UI is currently
 --- displaying a different dungeon. Returns nil if no preset exists.
@@ -236,26 +253,32 @@ end
 --- signal — active key, current UI map, current instance ID — to find
 --- the dungeon the player is in, then returns that dungeon's
 --- most-recent-selected preset.
+--- Get the user's most-recent preset for a specific dungeon index,
+--- regardless of where they're standing. Used by getCurrentPreset (with
+--- the auto-detected idx) and by the /zzk lustsim diagnostic (with a
+--- user-supplied idx, so we can test target extraction outside a key).
+local function getPresetForDungeonIdx(dungeonIdx)
+  if not _G.MDT or not dungeonIdx then return nil end
+  local db = mdtGetDB()
+  if not (db and type(db.presets) == "table") then return nil end
+  local presets = db.presets[dungeonIdx]
+  if type(presets) ~= "table" then return nil end
+  local presetIdx = (type(db.currentPreset) == "table"
+                      and db.currentPreset[dungeonIdx])
+                    or 1
+  local preset = presets[presetIdx]
+  if type(preset) == "table" then return preset, presetIdx end
+  return nil
+end
+
 local function getCurrentPreset()
   if not _G.MDT then return nil end
 
   -- (1) Detect the dungeon via any available signal.
-  -- (Diagnostic note: detectCurrentDungeonIdx() is also called directly
-  -- from /zzk lust for its source-of-lookup display — no need to cache
-  -- the result here, where state hasn't been declared yet.)
   local dungeonIdx = detectCurrentDungeonIdx()
   if dungeonIdx then
-    local db = mdtGetDB()
-    if db and type(db.presets) == "table" then
-      local presets = db.presets[dungeonIdx]
-      if type(presets) == "table" then
-        local presetIdx = (type(db.currentPreset) == "table"
-                            and db.currentPreset[dungeonIdx])
-                          or 1
-        local preset = presets[presetIdx]
-        if type(preset) == "table" then return preset end
-      end
-    end
+    local preset = getPresetForDungeonIdx(dungeonIdx)
+    if preset then return preset end
   end
 
   -- (2) Last resort: MDT's currently-displayed preset.
@@ -397,30 +420,17 @@ end
 
 --- Get the dungeon's boss order. Each entry: { name, encounterID }.
 --- Strategy:
----   (1) Encounter Journal (most authoritative, but needs an EJ instance
----       context — works during the active key via EJ_GetCurrentInstance)
----   (2) MDT.dungeonEnemies filtered to isBoss, sorted by NPC slot
----       (works in dry-run too, but slot order is a convention not a guarantee)
+---   (1) MDT.dungeonEnemies filtered to isBoss, sorted by NPC slot.
+---       Authoritative for per-boss encounterIDs and works out-of-key.
+---   (2) Encounter Journal fallback. Note: in 12.0 the
+---       EJ_GetEncounterInfoByIndex signature shifted such that the
+---       former dungeonEncounterID slot now returns the journal instance
+---       ID for every boss (e.g. NPX returns 2658 for all 3 bosses) —
+---       so we use EJ only for the boss *names* and ordering, never for
+---       encounterIDs. Pair each EJ name with an MDT encounterID by
+---       fuzzy-matching back to MDT.dungeonEnemies.
 local function getDungeonBossOrder(preset)
-  -- (1) Encounter Journal
-  if EJ_GetCurrentInstance and EJ_GetEncounterInfoByIndex then
-    local ok, jInstanceID = pcall(EJ_GetCurrentInstance)
-    if ok and type(jInstanceID) == "number" and jInstanceID > 0 then
-      if EJ_SelectInstance then pcall(EJ_SelectInstance, jInstanceID) end
-      local out = {}
-      for i = 1, 20 do
-        local name, _, journalEncounterID, _, _, _, dungeonEncounterID =
-          EJ_GetEncounterInfoByIndex(i)
-        if not name then break end
-        table.insert(out, {
-          name = name,
-          encounterID = dungeonEncounterID or journalEncounterID,
-        })
-      end
-      if #out > 0 then return out end
-    end
-  end
-  -- (2) Fallback: MDT enemy data, filter to bosses, sort by slot
+  -- (1) MDT enemy data — slot-ordered, per-boss encounterIDs.
   if _G.MDT and MDT.dungeonEnemies then
     local idx = getDungeonIdx(preset)
     local enemies = idx and MDT.dungeonEnemies[idx]
@@ -434,12 +444,29 @@ local function getDungeonBossOrder(preset)
           })
         end
       end
-      table.sort(indexed, function(a, b) return a.slot < b.slot end)
-      local out = {}
-      for _, b in ipairs(indexed) do
-        table.insert(out, { name = b.name, encounterID = b.encounterID })
+      if #indexed > 0 then
+        table.sort(indexed, function(a, b) return a.slot < b.slot end)
+        local out = {}
+        for _, b in ipairs(indexed) do
+          table.insert(out, { name = b.name, encounterID = b.encounterID })
+        end
+        return out
       end
-      return out
+    end
+  end
+  -- (2) EJ fallback — names only, encounterIDs left nil. (Better to
+  -- return nil than the broken 2658-for-everything value.)
+  if EJ_GetCurrentInstance and EJ_GetEncounterInfoByIndex then
+    local ok, jInstanceID = pcall(EJ_GetCurrentInstance)
+    if ok and type(jInstanceID) == "number" and jInstanceID > 0 then
+      if EJ_SelectInstance then pcall(EJ_SelectInstance, jInstanceID) end
+      local out = {}
+      for i = 1, 20 do
+        local name = EJ_GetEncounterInfoByIndex(i)
+        if not name then break end
+        table.insert(out, { name = name, encounterID = nil })
+      end
+      if #out > 0 then return out end
     end
   end
   return {}
@@ -587,9 +614,36 @@ local function extractTargetsFromNote(noteText, preset)
       if not s then break end
       local num = tonumber(n)
       if num then
-        table.insert(hits, { pos = s, kind = "pull", pullIndex = num })
+        table.insert(hits, {
+          pos = s, kind = "pull", pullIndex = num,
+          matchedBy = "pull-ref",
+        })
       end
       start = e + 1
+    end
+  end
+
+  -- "<ordinal> pull" — e.g. "first pull", "last pull", "2nd pull". Uses
+  -- the same ordinal tables as the boss-ordinal path below. Resolved to
+  -- a concrete pull index now (well-known) or to "first-combat" when the
+  -- ordinal is "first" and no pulls table is available yet.
+  if preset and preset.value and type(preset.value.pulls) == "table" then
+    local numPulls = #preset.value.pulls
+    for s, word in lower:gmatch("()(%a+)%s+pull%f[%W]") do
+      local fromStart = ORDINAL_FROM_START[word]
+      local fromEnd   = ORDINAL_FROM_END[word]
+      local pullIdx
+      if fromStart then
+        pullIdx = fromStart
+      elseif fromEnd then
+        pullIdx = numPulls - fromEnd + 1
+      end
+      if pullIdx and pullIdx >= 1 and pullIdx <= numPulls then
+        table.insert(hits, {
+          pos = s, kind = "pull", pullIndex = pullIdx,
+          matchedBy = "ordinal:" .. word,
+        })
+      end
     end
   end
 
@@ -613,7 +667,7 @@ local function extractTargetsFromNote(noteText, preset)
           table.insert(hits, {
             pos = s, kind = "boss",
             encounterID = boss.encounterID, name = boss.name,
-            matchVia = "ordinal:" .. word .. " boss",
+            matchedBy = "ordinal:" .. word .. " boss",
           })
         end
       end
@@ -627,7 +681,7 @@ local function extractTargetsFromNote(noteText, preset)
           table.insert(hits, {
             pos = s, kind = "boss",
             encounterID = boss.encounterID, name = boss.name,
-            matchVia = "ordinal:boss " .. idx,
+            matchedBy = "ordinal:boss " .. idx,
           })
         end
       end
@@ -665,14 +719,14 @@ local function extractTargetsFromNote(noteText, preset)
             if e.isBoss and e.encounterID then
               table.insert(hits, {
                 pos = pos or 1, kind = "boss",
-                encounterID = e.encounterID, name = e.name, matchVia = via,
+                encounterID = e.encounterID, name = e.name, matchedBy = via,
               })
             else
               local pullIdx = findPullContainingSlot(preset, slot)
               if pullIdx then
                 table.insert(hits, {
                   pos = pos or 1, kind = "pull",
-                  pullIndex = pullIdx, name = e.name, matchVia = via,
+                  pullIndex = pullIdx, name = e.name, matchedBy = via,
                 })
               end
             end
@@ -685,12 +739,39 @@ local function extractTargetsFromNote(noteText, preset)
   -- (2) Sort by note position so the output mirrors the author's order.
   table.sort(hits, function(a, b) return a.pos < b.pos end)
 
-  -- (3) Deduplicate by (kind + key).
+  -- (3) Deduplicate.
+  --   * Pulls dedup by pullIndex.
+  --   * Bosses dedup by NAME (not encounterID) — because MDT stores
+  --     the journal instance ID in the per-boss encounterID field for
+  --     every boss in a dungeon (e.g. every NPX boss shows encID 2658),
+  --     keying on encID would collapse 3 distinct boss targets into 1.
+  --   * If a boss-hit exists for an enemy name AND a pull-hit also
+  --     references that same enemy name (typically when an MDT entry
+  --     exists for both the boss form and a trash spawn of the same
+  --     enemy), the boss-hit wins. The pull-hit would fire at a slightly
+  --     different time but conceptually targets the same encounter.
+  --     "pull N" references stay because they have no enemy name.
+  local bossNames = {}
+  for _, h in ipairs(hits) do
+    if h.kind == "boss" and type(h.name) == "string" then
+      bossNames[h.name:lower()] = true
+    end
+  end
+
   local out, seen = {}, {}
   for _, h in ipairs(hits) do
-    local key = (h.kind == "pull") and ("p" .. h.pullIndex)
-                                    or  ("b" .. tostring(h.encounterID))
-    if not seen[key] then
+    local key
+    if h.kind == "pull" then
+      -- Drop if this pull-hit's enemy name is already covered by a boss-hit.
+      if type(h.name) == "string" and bossNames[h.name:lower()] then
+        key = nil  -- skip
+      else
+        key = "p" .. tostring(h.pullIndex)
+      end
+    else
+      key = "b" .. tostring(h.name or h.encounterID)
+    end
+    if key and not seen[key] then
       seen[key] = true
       table.insert(out, h)
     end
@@ -741,20 +822,15 @@ end
 ---   1) Tactyks-style: a global note in `objects` lists pulls/bosses
 ---      ("Lust on pull 1, Araknath, and High Sage")
 ---   2) Per-pull notes — older / per-author convention
-local function findLustTargetFromMDT()
-  local preset = getCurrentPreset()
+--- Extract the lust target list from a specific preset. Pure function:
+--- no global state access, no event firing, no MDT mutations. Designed so
+--- the /zzk lustsim command can call it on any preset for out-of-key
+--- testing of the parse pipeline.
+local function findLustTargetFromPreset(preset)
   if not preset or not preset.value or type(preset.value.pulls) ~= "table" then
     return nil
   end
-  -- Forces total is best-effort — if it's 0, we still continue and parse
-  -- the note. Pull-based targets without a known total fire on first
-  -- combat instead of via forces % (handled in loadTargetForCurrentKey).
-  -- Boss-name targets don't need a total at all.
   local total = totalForces(preset) or 0
-
-  ----------------------------------------------------------------
-  -- Strategy 1: Tactyks-style — single global note with multiple refs
-  ----------------------------------------------------------------
   local noteText = findLustNoteText(preset)
   if noteText then
     local hits = extractTargetsFromNote(noteText, preset)
@@ -767,13 +843,7 @@ local function findLustTargetFromMDT()
         totalCount = total,
       }
     end
-    -- Found a lust note but no extractable target — fall through to
-    -- per-pull scan so we can still try.
   end
-
-  ----------------------------------------------------------------
-  -- Strategy 2: per-pull notes
-  ----------------------------------------------------------------
   for i, pull in ipairs(preset.value.pulls) do
     local note = pull.text or pull.note or pull.notes
     if isLustNote(note) then
@@ -786,8 +856,11 @@ local function findLustTargetFromMDT()
       }
     end
   end
-
   return nil
+end
+
+local function findLustTargetFromMDT()
+  return findLustTargetFromPreset(getCurrentPreset())
 end
 
 ----------------------------------------------------------------------
@@ -831,11 +904,6 @@ local state = {
   lastForcesPct       = nil,
   lastForcesAt        = nil,
   lastForcesErr       = nil,
-  -- Widget auto-discovery via UPDATE_UI_WIDGET. Populated as widgets
-  -- update during the key; we use it to find the forces widget without
-  -- having to guess which set it lives in.
-  seenWidgets         = {},  -- [widgetID] = { type, text, barValue, barMax, tooltip, hits }
-  forcesWidgetID      = nil, -- locked once we identify the forces widget
 }
 
 local backupTicker
@@ -883,8 +951,6 @@ local function resetState()
   state.criteriaSnapshotAt = nil
   state.lastStepPct = nil
   state.lastForcesSource = nil
-  state.seenWidgets = {}
-  state.forcesWidgetID = nil
   if backupTicker then backupTicker:Cancel(); backupTicker = nil end
 end
 
@@ -1017,244 +1083,173 @@ end
 -- Forces % helpers
 ----------------------------------------------------------------------
 
+--- Defensive guard: return true if `v` is a Midnight Secret Value. Any
+--- arithmetic or comparison on a Secret throws a Lua error, so any code
+--- path that operates on potentially-secret values must check this
+--- first.
+---
+--- As of 12.0 the scenario criteria fields we read (`isWeightedProgress`,
+--- `totalQuantity`, `quantityString`) are NOT Secret in M+ keys — verified
+--- against WarpDeplete (which compares them directly without any guard)
+--- and the Blizzard API docs (zero field-level SecretWhenInX predicates
+--- on C_ScenarioInfo.GetCriteriaInfo). But Blizzard can flip any API to
+--- Secret in a future patch, so we check anyway. Better degrade than crash.
+---
+--- Declared up here (before snapshotScenario and getEnemyForcesPct) so
+--- Lua's parse-time local resolution can see it.
+local function isSecret(v)
+  if _G.issecretvalue then
+    local ok, result = pcall(_G.issecretvalue, v)
+    if ok then return result == true end
+  end
+  return false
+end
+
 --- Capture the scenario step + every criterion into a plain Lua snapshot
---- so we can inspect what M+ is actually exposing without needing to be
---- in-key when the diagnostic command runs.
+--- so we can inspect what M+ is actually exposing.
+---
+--- Canonical 12.0 path (matches WarpDeplete's UpdateObjectives):
+---   * `C_Scenario.GetStepInfo()` still works; 3rd return value is the
+---     criterion count for the active step
+---   * `C_ScenarioInfo.GetCriteriaInfo(i)` returns the table-shaped info
+---     for each criterion index (1..numCriteria)
+---   * `C_ScenarioInfo.GetStepInfo` was removed in 12.0 — don't use it
 local function snapshotScenario()
-  if not _G.C_ScenarioInfo then return nil, "C_ScenarioInfo namespace nil" end
-  if not C_ScenarioInfo.GetStepInfo then return nil, "C_ScenarioInfo.GetStepInfo nil" end
-  if not C_ScenarioInfo.GetCriteriaInfo then return nil, "C_ScenarioInfo.GetCriteriaInfo nil" end
-  local ok, step = pcall(C_ScenarioInfo.GetStepInfo)
-  if not ok then return nil, "GetStepInfo errored: " .. tostring(step) end
-  if type(step) ~= "table" then
-    return nil, "GetStepInfo returned " .. type(step) .. " (no active scenario)"
+  if not (_G.C_Scenario and C_Scenario.GetStepInfo) then
+    return nil, "C_Scenario.GetStepInfo nil"
+  end
+  if not (_G.C_ScenarioInfo and C_ScenarioInfo.GetCriteriaInfo) then
+    return nil, "C_ScenarioInfo.GetCriteriaInfo nil"
+  end
+
+  -- C_Scenario.GetStepInfo returns multiple values. The 3rd is numCriteria.
+  -- It returns nothing useful (or zero criteria) when not in a scenario,
+  -- so we treat numCriteria == 0 as "no active scenario step".
+  local ok, name, currentStage, numCriteria = pcall(C_Scenario.GetStepInfo)
+  if not ok then return nil, "GetStepInfo errored: " .. tostring(name) end
+  numCriteria = type(numCriteria) == "number" and numCriteria or 0
+  if numCriteria <= 0 then
+    return nil, "no active scenario (numCriteria=" .. tostring(numCriteria) .. ")"
   end
 
   local snap = {
-    numCriteria  = step.numCriteria,
-    isInProgress = step.isInProgress,
-    criteria     = {},
+    stepName    = name,
+    currentStage = currentStage,
+    numCriteria = numCriteria,
+    criteria    = {},
   }
-  local count = step.numCriteria or 5
-  for i = 1, count do
+  for i = 1, numCriteria do
     local ok2, crit = pcall(C_ScenarioInfo.GetCriteriaInfo, i)
     if not ok2 then
       snap.criteria[i] = { error = tostring(crit) }
     elseif type(crit) ~= "table" then
       snap.criteria[i] = { otherType = type(crit) }
     else
-      snap.criteria[i] = {
-        quantity           = crit.quantity,
-        totalQuantity      = crit.totalQuantity,
-        isWeightedProgress = crit.isWeightedProgress,
-        description        = crit.description,
-        quantityString     = crit.quantityString,
-        isFormatted        = crit.isFormatted,
-        completed          = crit.completed,
-      }
+      -- Copy each field individually inside its own pcall so a single
+      -- field becoming Secret in a future patch doesn't crater the whole
+      -- snapshot. We record the secret-status so /zzk lust can show it.
+      local row = { __secret = {} }
+      local function take(name)
+        local okv, val = pcall(function() return crit[name] end)
+        if not okv then row.__secret[name] = "read errored" return end
+        if val ~= nil and (function()
+              local ok3, isS = pcall(isSecret, val)
+              return ok3 and isS
+            end)() then
+          row.__secret[name] = "secret"
+          return
+        end
+        row[name] = val
+      end
+      take("quantity")
+      take("totalQuantity")
+      take("isWeightedProgress")
+      take("description")
+      take("quantityString")
+      take("criteriaType")
+      take("completed")
+      take("elapsed")
+      snap.criteria[i] = row
     end
   end
   return snap
 end
 
--- Widget sets that may contain the M+ forces display. 252 is
--- SCENARIO_TRACKER_WIDGET_SET (per KalielsTracker). We scan a wide-ish
--- range so we catch the right one even if Blizzard moves it.
-local FORCES_WIDGET_SET_IDS = {
-  252, 253, 254, 255, 256, 257, 258, 259, 260,
-  261, 262, 263, 264, 265, 266, 267, 268, 269, 270,
-  279, 282, 290,
-}
+-- (Widget-scan path removed 2026-06-11 — the M+ forces display is NOT
+-- routed through any UI widget set in 12.0. Canonical path is now the
+-- C_ScenarioInfo.GetCriteriaInfo loop in getEnemyForcesPct below; we
+-- verified empirically (`/zzk lustscan 500` returned zero matches in
+-- multiple keys) and against WarpDeplete's reference implementation.)
 
---- Try to extract a forces-style percentage from arbitrary text. M+
---- renders the forces text as "1234 / 5678" or "23.4%" or "23%". We try
---- both shapes. Returns the percentage 0..100 or nil.
-local function parseForcesText(text)
-  if type(text) ~= "string" or text == "" then return nil end
-  local num, denom = text:match("(%d+)%s*/%s*(%d+)")
-  if num and denom then
-    local n, d = tonumber(num), tonumber(denom)
-    if n and d and d > 50 then return (n / d) * 100 end
-  end
-  local pct = text:match("([%d%.]+)%s*%%")
-  if pct then
-    local p = tonumber(pct)
-    if p and p >= 0 and p <= 100 then return p end
-  end
-  return nil
-end
-
---- Read the value of a single widget by ID + type. Returns the pct value
---- if it's a forces-shaped widget, plus a record of what we saw (for the
---- seenWidgets table).
-local function readWidgetByID(widgetID, widgetType)
-  if not widgetID then return nil end
-  local record = { type = widgetType }
-  if widgetType == 2 and C_UIWidgetManager.GetStatusBarWidgetVisualizationInfo then
-    local ok, info = pcall(C_UIWidgetManager.GetStatusBarWidgetVisualizationInfo, widgetID)
-    if ok and type(info) == "table" then
-      record.barValue = info.barValue
-      record.barMax   = info.barMax
-      record.tooltip  = info.tooltip
-      local bv = tonumber(info.barValue)
-      local bx = tonumber(info.barMax)
-      if bv and bx and bx > 50 then
-        return (bv / bx) * 100, record
-      end
-    end
-  elseif widgetType == 8 and C_UIWidgetManager.GetTextWithStateWidgetVisualizationInfo then
-    local ok, info = pcall(C_UIWidgetManager.GetTextWithStateWidgetVisualizationInfo, widgetID)
-    if ok and type(info) == "table" then
-      record.text    = info.text
-      record.tooltip = info.tooltip
-      local pct = parseForcesText(info.text)
-      if pct then return pct, record end
-    end
-  end
-  return nil, record
-end
-
---- Should we accept this widget as the forces widget? Tightened so we
---- don't false-lock onto random progress bars (cooking events, etc.):
----   * pct must be < 95 (real M+ forces starts at 0; if a widget is at
----     100% on our first sight, it's almost certainly not the forces bar)
----   * if tooltip is non-empty, it must look forces-related — anything
----     that mentions "cauldron"/"ingredient"/"meal"/"cooking" is rejected
-local function widgetLooksLikeForces(pct, record)
-  if type(pct) ~= "number" or pct < 0 or pct >= 95 then return false end
-  if type(record) ~= "table" then return false end
-  local tip = (type(record.tooltip) == "string") and record.tooltip:lower() or ""
-  if tip ~= "" then
-    for _, bad in ipairs({ "cauldron", "ingredient", "meal", "cooking",
-                          "stoup", "feast", "fishing", "anglers", "angler" }) do
-      if tip:find(bad, 1, true) then return false end
-    end
-  end
-  return true
-end
-
---- Called from UPDATE_UI_WIDGET. Records the widget into seenWidgets,
---- and if its value matches the forces shape AND passes the tighter
---- checks above, locks the widget ID for future ticks.
-local function onWidgetUpdate(tbl)
-  if not state.active or type(tbl) ~= "table" then return end
-  local id  = tbl.widgetID
-  local typ = tbl.widgetType
-  if not id then return end
-  local pct, record = readWidgetByID(id, typ)
-  if not record then return end
-  record.hits = (state.seenWidgets[id] and state.seenWidgets[id].hits or 0) + 1
-  state.seenWidgets[id] = record
-  if not state.forcesWidgetID and widgetLooksLikeForces(pct, record) then
-    state.forcesWidgetID = id
-  end
-end
-
---- Scan widget sets for the M+ enemy forces. Strategy:
----   (a) If UPDATE_UI_WIDGET previously identified a forces widget, read
----       that one directly.
----   (b) Walk every widget the event has seen, parse for the forces shape.
----   (c) Fall back to scanning candidate widget sets.
-local function readForcesFromWidgets()
-  if not _G.C_UIWidgetManager then return nil end
-
-  -- (a) Locked widget — fastest path.
-  if state.forcesWidgetID then
-    local rec = state.seenWidgets[state.forcesWidgetID]
-    local pct, newRec = readWidgetByID(state.forcesWidgetID, rec and rec.type)
-    if pct and newRec then
-      newRec.hits = (rec and rec.hits or 0) + 1
-      state.seenWidgets[state.forcesWidgetID] = newRec
-      state.lastForcesSource = "locked widget id=" .. state.forcesWidgetID
-      return pct
-    end
-  end
-
-  -- (b) Walk every UPDATE_UI_WIDGET-discovered widget. Only commit to a
-  -- widget that passes the "looks like forces" check.
-  for id, rec in pairs(state.seenWidgets) do
-    local pct, newRec = readWidgetByID(id, rec.type)
-    if pct and newRec and widgetLooksLikeForces(pct, newRec) then
-      newRec.hits = (rec.hits or 0) + 1
-      state.seenWidgets[id] = newRec
-      state.forcesWidgetID = id
-      state.lastForcesSource = "discovered widget id=" .. id
-      return pct
-    end
-  end
-
-  -- (c) Fall back to scanning candidate sets.
-  if not C_UIWidgetManager.GetAllWidgetsBySetID then return nil end
-  for _, setID in ipairs(FORCES_WIDGET_SET_IDS) do
-    local ok, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, setID)
-    if ok and type(widgets) == "table" then
-      -- Pass 1: StatusBar widgets
-      -- Both widget types — accept whichever passes widgetLooksLikeForces.
-      for _, w in ipairs(widgets) do
-        if w and w.widgetID then
-          local pct, record = readWidgetByID(w.widgetID, w.widgetType)
-          if pct and record and widgetLooksLikeForces(pct, record) then
-            state.lastForcesSource = string.format(
-              "widget set=%d id=%d", setID, w.widgetID)
-            state.forcesWidgetID = w.widgetID
-            state.seenWidgets[w.widgetID] = record
-            return pct
-          end
-        end
-      end
-    end
-  end
-  return nil
-end
-
---- Returns the current enemy forces percentage (0..100), or nil. Three
---- strategies in order, narrowest to widest:
----   (1) UI widget StatusBar in the scenario widget sets (12.0 path — this
----       is where Blizzard moved the bar from criteria)
----   (2) Legacy `C_Scenario.GetStepInfo()` position 10 — kept as safety net
----       for non-M+ weighted scenarios
----   (3) New-style criteria iteration via `C_ScenarioInfo.GetCriteriaInfo`
----       — only fires for criteria flagged weightedProgress or matching
----       description/qString heuristics. M+ never reaches here.
+--- Returns the current enemy forces percentage (0..100), or nil if there
+--- is no active M+ scenario.
+---
+--- Canonical 12.0 path (verified against WarpDeplete's UpdateObjectives,
+--- which is the reference implementation for M+ trackers post-Midnight):
+---
+---   1. `C_Scenario.GetStepInfo()` 3rd return value = criterion count
+---   2. For each i = 1..numCriteria, fetch `C_ScenarioInfo.GetCriteriaInfo(i)`
+---   3. The Enemy Forces criterion is the one with `info.isWeightedProgress = true`
+---   4. Current count = `tonumber(info.quantityString:match("%d+"))` — the
+---      `quantity` field is often 0 in 12.0 even when there's progress;
+---      `quantityString` is what's actually shown in the scenario tracker
+---   5. Percentage = (current / info.totalQuantity) * 100
+---
+--- All comparisons + arithmetic are pcall-wrapped so that if a future
+--- patch flips any of these fields to a Secret Value, we return nil and
+--- log a clear diagnostic message instead of erroring out the tick.
+---
+--- The UI-widget scan (`readForcesFromWidgets`) is kept only for the
+--- `/zzk lustscan` diagnostic — Blizzard moved forces *out* of widgets
+--- before 12.0.5 so it's no longer reachable that way in any live key.
 local function getEnemyForcesPct()
-  -- Always snapshot the new-style criteria for /zzk lust diagnostics.
+  -- Always snapshot the criteria for the /zzk lust diagnostic, even if
+  -- we end up returning nil (e.g. outside a scenario).
   local snap, err = snapshotScenario()
   state.criteriaSnapshot    = snap
   state.criteriaSnapshotErr = err
   state.criteriaSnapshotAt  = GetTime()
 
-  -- Primary: UI Widget Manager (the 12.0 path for M+).
-  local widgetPct = readForcesFromWidgets()
-  if widgetPct then
-    state.lastStepPct = widgetPct
-    return widgetPct
-  end
+  if not snap then return nil end
 
-  -- Fallback: legacy step-info (works for some non-M+ scenarios).
-  if _G.C_Scenario and C_Scenario.GetStepInfo then
-    local ok, p = pcall(function() return select(10, C_Scenario.GetStepInfo()) end)
-    if ok and type(p) == "number" and p > 0 then
-      state.lastStepPct = p
-      return p
-    end
-  end
-
-  -- Fallback: criteria walk (other scenario types).
-  if snap then
-    for _, c in ipairs(snap.criteria) do
-      if type(c) == "table" and not c.error and not c.otherType then
-        local q  = tonumber(c.quantity) or 0
-        local tq = tonumber(c.totalQuantity) or 0
-        if tq > 0 then
-          if c.isWeightedProgress then return (q / tq) * 100 end
-          local desc = (type(c.description) == "string") and c.description:lower() or ""
-          if desc:find("force", 1, true) then return (q / tq) * 100 end
-          local qStr = (type(c.quantityString) == "string") and c.quantityString or ""
-          if qStr:find("%%", 1, true) then return (q / tq) * 100 end
+  for i, c in ipairs(snap.criteria) do
+    if type(c) ~= "table" or c.error or c.otherType then
+      -- skip
+    elseif isSecret(c.isWeightedProgress)
+        or isSecret(c.totalQuantity)
+        or isSecret(c.quantityString) then
+      state.lastForcesSource = string.format(
+        "criteria idx %d has secret values — Blizzard restricted this API; skipping", i)
+    else
+      -- pcall every operation that could fail if a value silently became
+      -- Secret without us catching it via isSecret() — defence in depth.
+      local ok, pct, current, qStr = pcall(function()
+        if not c.isWeightedProgress then return nil end
+        if type(c.totalQuantity) ~= "number" or c.totalQuantity <= 0 then
+          return nil
         end
+        local qs = (type(c.quantityString) == "string") and c.quantityString or ""
+        local cur = tonumber(qs:match("(%d+)")) or tonumber(c.quantity) or 0
+        local p = (cur / c.totalQuantity) * 100
+        if p < 0 then p = 0 end
+        if p > 100 then p = 100 end
+        return p, cur, qs
+      end)
+      if not ok then
+        state.lastForcesSource = "pcall errored on criteria idx " .. i
+          .. " — possible undocumented Secret Value: " .. tostring(pct)
+      elseif type(pct) == "number" then
+        state.lastStepPct      = pct
+        state.lastForcesSource = string.format(
+          "criteria idx %d  qStr=%q  current=%d / total=%d  desc=%q",
+          i, tostring(qStr), current, c.totalQuantity, tostring(c.description))
+        return pct
       end
     end
   end
+
+  state.lastForcesSource = state.lastForcesSource
+    or "no isWeightedProgress criterion found"
   return nil
 end
 
@@ -1408,6 +1403,14 @@ local function tickForcesCheck(triggerSource)
     state.lastForcesErr = "getEnemyForcesPct returned nil (no weighted-progress criterion?)"
     return
   end
+  -- Final secret-value guard. getEnemyForcesPct already filters Secrets
+  -- internally but if a future patch sneaks a Secret through and pct is
+  -- itself secret, the `>=` comparison below would crash.
+  if isSecret(pct) or type(pct) ~= "number" then
+    state.lastForcesErr = "getEnemyForcesPct returned a non-number ("
+      .. type(pct) .. ", isSecret=" .. tostring(isSecret(pct)) .. ")"
+    return
+  end
   state.lastForcesPct = pct
   state.lastForcesAt  = GetTime()
   state.lastForcesErr = nil
@@ -1418,18 +1421,64 @@ local function tickForcesCheck(triggerSource)
         and not t.fireOnFirstCombat
         and t.targetPct
         and pct >= (t.targetPct - lead) then
-      fireAlert(t, string.format("forces %.0f%% (target %.0f%%, via %s)",
-        pct, t.targetPct, tostring(triggerSource or "?")))
+      fireAlert(t, string.format("forces %.0f%% (target %.0f%%)",
+        pct, t.targetPct))
     end
   end
 end
 
-local function onEncounterStart(encounterID)
+--- Forgiving boss-name comparison. Returns true if:
+---   * exact case-insensitive match, OR
+---   * one name is a substring of the other AND the shorter name is
+---     >= 5 chars (catches "Tyrannus" inside "Scourgelord Tyrannus" or
+---     "Garfrost" inside "Forgemaster Garfrost" without matching short
+---     common words like "the" or "lord").
+--- MDT and Blizzard sometimes disagree on title prefixes — MDT stores
+--- the full creature name while ENCOUNTER_START often fires the short
+--- form, so an exact-equality check missed legitimate matches.
+local function bossNamesMatch(a, b)
+  if type(a) ~= "string" or type(b) ~= "string" then return false end
+  a, b = a:lower(), b:lower()
+  if a == b then return true end
+  if #a >= 5 and b:find(a, 1, true) then return true end
+  if #b >= 5 and a:find(b, 1, true) then return true end
+  return false
+end
+
+--- Match a boss target against the live ENCOUNTER_START payload.
+--- Strategy (in order):
+---   (1) Forgiving name match (substring + min length). Most reliable
+---       because the event gives us the real boss name and MDT stores
+---       accurate names.
+---   (2) encounterID match. Only matters when we somehow have a real
+---       per-boss encID (rare in 12.0 — MDT/EJ both return the journal
+---       instance ID for every boss).
+local function onEncounterStart(encounterID, encounterName)
   if not state.active then return end
+  -- Diagnostic line: one print per boss engage during an active key,
+  -- so we can see exactly what fired and what targets were considered.
+  -- Quiet, useful, only fires when state.active so it stays out of the
+  -- way outside keys.
+  local pending = {}
   for _, t in ipairs(state.targets) do
-    if not t.fired and t.kind == "boss" and t.encounterID == encounterID then
-      fireAlert(t, "boss engaged")
-      return
+    if not t.fired and t.kind == "boss" then
+      table.insert(pending, tostring(t.name or ("encID " .. tostring(t.encounterID))))
+    end
+  end
+  print(string.format(
+    "|cffff8800ZZK boss engage:|r %q (encID %s)  pending: %s",
+    tostring(encounterName), tostring(encounterID),
+    (#pending > 0) and table.concat(pending, ", ") or "(none)"))
+
+  for _, t in ipairs(state.targets) do
+    if not t.fired and t.kind == "boss" then
+      local matched = bossNamesMatch(t.name, encounterName)
+        or (t.encounterID and t.encounterID == encounterID)
+      if matched then
+        fireAlert(t, "boss engaged" ..
+          (encounterName and (" (" .. encounterName .. ")") or ""))
+        return
+      end
     end
   end
 end
@@ -1453,8 +1502,7 @@ frame:RegisterEvent("SCENARIO_CRITERIA_UPDATE")
 frame:RegisterEvent("ENCOUNTER_START")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("PLAYER_REGEN_DISABLED")
-frame:RegisterEvent("UPDATE_UI_WIDGET")
-frame:SetScript("OnEvent", function(_, event, arg1)
+frame:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
   if event == "CHALLENGE_MODE_START" then
     resetState()
     -- Slight delay so MDT has a chance to react to the dungeon zone in
@@ -1492,595 +1540,252 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     return
   end
   if event == "ENCOUNTER_START" then
-    onEncounterStart(arg1)
+    -- ENCOUNTER_START fires with (encounterID, encounterName, difficultyID, groupSize).
+    -- Pass both because MDT stores the journal instance ID in its
+    -- per-boss encounterID field for every boss in a dungeon (e.g. 2658
+    -- for every NPX boss), so encID matching alone is unreliable. The
+    -- handler prefers a name match, then falls back to encID.
+    onEncounterStart(arg1, arg2)
     return
   end
   if event == "PLAYER_REGEN_DISABLED" then
     onRegenDisabled()
     return
   end
-  if event == "UPDATE_UI_WIDGET" then
-    onWidgetUpdate(arg1)
-    return
-  end
 end)
 
 ----------------------------------------------------------------------
--- Exposed for /zzk slash subcommands
+-- Simulation command: /zzk lustsim [dungeonIdx]
+--
+-- Runs the full lust-target extraction pipeline against any MDT dungeon
+-- preset, without requiring an active key. With no argument it walks
+-- every MDT dungeon with a preset and prints a summary line per
+-- dungeon ("✓ lust found" / "✗ no lust note"). With a numeric argument
+-- it prints the full per-target dump for that specific dungeon.
+--
+-- Tests covered:
+--   * mdtGetDB() resolution
+--   * preset lookup for an explicit dungeonIdx (no challenge mode check)
+--   * findLustNoteText() — does the parser find a lust note?
+--   * extractTargetsFromNote() — what targets does it extract?
+--   * isLustNote() per-pull fallback
+--   * Encounter Journal boss-order resolution for ordinal references
+--   * Curated fallback data (when present)
 ----------------------------------------------------------------------
 
-function Keys.LustReminderStatus()
-  local _, classToken = UnitClass("player")
-  print("|cffff8800ZugZug Keys (lust):|r")
-  print("  enabled = " .. tostring(ZugZugKeysDB.lustReminder)
-    .. "  class = " .. tostring(classToken)
-    .. "  canPlayerLust = " .. tostring(canPlayerLust()))
-  if not canPlayerLust() then
-    print("  |cffffaa00(reminder is suppressed in-key — your class doesn't bring a lust spell. /zzk lusttest still previews.)|r")
+--- Project the same per-hit metadata loadTargetForCurrentKey computes
+--- (targetPct, fireOnFirstCombat) so the simulation shows the same
+--- target state the real run would set up.
+local function projectHit(h, preset, total)
+  if h.kind == "pull" then
+    local cum = (total > 0) and cumulativeCountBeforePull(preset, h.pullIndex) or 0
+    local pct = (total > 0) and ((cum / total) * 100) or 0
+    return {
+      kind              = "pull",
+      pullIndex         = h.pullIndex,
+      name              = h.name,
+      matchedBy         = h.matchedBy,
+      targetPct         = pct,
+      fireOnFirstCombat = pct < 3,
+    }
+  elseif h.kind == "boss" then
+    return {
+      kind        = "boss",
+      encounterID = h.encounterID,
+      name        = h.name,
+      matchedBy   = h.matchedBy,
+    }
   end
-  print("  state.active = " .. tostring(state.active)
-    .. "  firstCombatHandled = " .. tostring(state.firstCombatHandled))
-  print("  source = " .. tostring(state.source) .. "  noteSource = " .. tostring(state.noteSource))
-  if state.presetName then
-    print("  preset: '" .. tostring(state.presetName) .. "'")
-  end
-  if state.routeNote then
-    print("  note: " .. tostring(state.routeNote))
-  end
-  -- Full detection chain so we can see exactly which signal MDT matched.
-  do
-    local okC, cMapID = pcall(C_ChallengeMode.GetActiveChallengeMapID)
-    local okM, uiMapID = pcall(C_Map.GetBestMapForUnit, "player")
-    local _, instType, _, _, _, _, _, instanceID = GetInstanceInfo()
-    print(string.format("  active key mapID=%s, player UIMapID=%s, instance(%s)=%s",
-      tostring(okC and cMapID or "?"),
-      tostring(okM and uiMapID or "?"),
-      tostring(instType), tostring(instanceID)))
-    local dungeonIdx, source = detectCurrentDungeonIdx()
-    print("  detectCurrentDungeonIdx() = " .. tostring(dungeonIdx)
-      .. "  source: " .. tostring(source))
-    print("  MDT.zoneIdToDungeonIdx exists: "
-      .. tostring(_G.MDT and type(MDT.zoneIdToDungeonIdx) == "table"))
-    local db = mdtGetDB()
-    if dungeonIdx and db and type(db.presets) == "table"
-        and type(db.presets[dungeonIdx]) == "table" then
-      local presets = db.presets[dungeonIdx]
-      local presetIdx = (type(db.currentPreset) == "table"
-                          and db.currentPreset[dungeonIdx]) or 1
-      local preset = presets[presetIdx]
-      print(string.format("  → preset[%d]=%q  (out of %d for this dungeon)",
-        presetIdx, tostring(preset and preset.text or "?"), #presets))
-    elseif dungeonIdx then
-      local dungName = _G.MDT and MDT.dungeonList and MDT.dungeonList[dungeonIdx]
-                      or "(unknown)"
-      print(string.format("  → MDT has no presets[%d] entry — open MDT, switch to %s, import a route",
-        dungeonIdx, tostring(dungName)))
-    end
-  end
-  -- Boss order for the currently-resolved dungeon, so we can verify
-  -- ordinal references ("first boss" / "last boss") would resolve.
-  local previewPreset = getCurrentPreset()
-  if previewPreset then
-    local bo = getDungeonBossOrder(previewPreset)
-    if #bo > 0 then
-      print("  boss order (" .. #bo .. "):")
-      for i, b in ipairs(bo) do
-        print(string.format("    %d. %s (encID %s)", i, tostring(b.name), tostring(b.encounterID)))
-      end
+  return h
+end
+
+local function dumpHitList(label, hits, preset, total)
+  print(string.format("  %s (%d hits):", label, #hits))
+  for i, raw in ipairs(hits) do
+    local h = projectHit(raw, preset, total)
+    if h.kind == "pull" then
+      local prefix = h.fireOnFirstCombat and "[first-combat]" or "[forces]"
+      local pctStr = h.targetPct
+        and string.format("%.1f%%", h.targetPct)
+        or "nil"
+      local nameStr = h.name and (" name=" .. h.name) or ""
+      print(string.format("    %d. %s pull=%d  targetPct=%s  matchedBy=%s%s",
+        i, prefix, h.pullIndex, pctStr,
+        tostring(h.matchedBy or "?"), nameStr))
+    elseif h.kind == "boss" then
+      print(string.format("    %d. [boss] encID=%s  name=%q  matchedBy=%s",
+        i, tostring(h.encounterID), tostring(h.name or "?"),
+        tostring(h.matchedBy or "?")))
     else
-      print("  boss order: (none — EJ unavailable and MDT enemy data has no isBoss entries)")
-    end
-  end
-  print("  targets (" .. tostring(#state.targets) .. "):")
-  for i, t in ipairs(state.targets) do
-    if t.kind == "pull" then
-      local label = t.name and (t.name .. " (pull " .. t.pullIndex .. ")")
-                            or ("pull " .. tostring(t.pullIndex))
-      print(string.format("    [%d] %s @ %.1f%% — fired=%s%s",
-        i, label, t.targetPct or 0, tostring(t.fired),
-        t.fireOnFirstCombat and " (waits for combat)" or ""))
-    else
-      local label = t.name and (t.name .. " (encID " .. tostring(t.encounterID) .. ")")
-                            or ("boss encID=" .. tostring(t.encounterID))
-      print(string.format("    [%d] %s — fired=%s", i, label, tostring(t.fired)))
-    end
-  end
-  print("  MDT loaded = " .. tostring(_G.MDT ~= nil))
-  -- Live forces lookup (right now, this very call)
-  local liveOk, livePct = pcall(getEnemyForcesPct)
-  local liveStr
-  if not liveOk then
-    liveStr = "|cffff6666pcall error: " .. tostring(livePct) .. "|r"
-  elseif livePct == nil then
-    liveStr = "nil (no active scenario / no weighted-progress criterion)"
-  else
-    liveStr = string.format("%.2f", livePct)
-  end
-  print("  current forces % (live call) = " .. liveStr)
-  -- In-key diagnostics
-  print("  diagnostics:")
-  print(string.format("    SCENARIO_CRITERIA_UPDATE fired: %d times",
-    state.scenarioUpdateCount or 0))
-  print(string.format("    tickForcesCheck calls: %d", state.forcesCheckCount or 0))
-  print(string.format("    last forces %% seen: %s%s",
-    state.lastForcesPct and string.format("%.2f", state.lastForcesPct) or "nil",
-    state.lastForcesAt and string.format(" (%.1fs ago)", GetTime() - state.lastForcesAt) or ""))
-  -- Show the legacy C_Scenario.GetStepInfo() position-10 value separately
-  -- so we can tell which detection path is firing.
-  if _G.C_Scenario and C_Scenario.GetStepInfo then
-    local ok, p = pcall(function() return select(10, C_Scenario.GetStepInfo()) end)
-    print(string.format("    C_Scenario.GetStepInfo() pos-10 (live): ok=%s value=%s (type=%s)",
-      tostring(ok), tostring(p), type(p)))
-  else
-    print("    C_Scenario.GetStepInfo not available")
-  end
-  if state.lastForcesSource then
-    print("    last forces source: " .. tostring(state.lastForcesSource))
-  end
-  -- Widgets that UPDATE_UI_WIDGET has surfaced so far. The forces widget
-  -- shows up here automatically once it ticks during the key.
-  local seenCount = 0
-  for _ in pairs(state.seenWidgets) do seenCount = seenCount + 1 end
-  if seenCount > 0 then
-    print(string.format("    UPDATE_UI_WIDGET seen %d widgets, forcesWidgetID=%s:",
-      seenCount, tostring(state.forcesWidgetID)))
-    for id, rec in pairs(state.seenWidgets) do
-      if rec.type == 8 then
-        print(string.format("      [text type=8] id=%d hits=%d text=%q tooltip=%q parsed=%s",
-          id, rec.hits or 0, tostring(rec.text or ""), tostring(rec.tooltip or ""),
-          tostring(parseForcesText(rec.text))))
-      elseif rec.type == 2 then
-        print(string.format("      [bar  type=2] id=%d hits=%d val=%s/%s tooltip=%q",
-          id, rec.hits or 0, tostring(rec.barValue), tostring(rec.barMax),
-          tostring(rec.tooltip or "")))
-      else
-        print(string.format("      [type=%s] id=%d hits=%d", tostring(rec.type), id, rec.hits or 0))
-      end
-    end
-  end
-  -- Dump scenario widget sets. The M+ forces display lives here in 12.0,
-  -- as a TextWithState (type 8) widget — we render the actual text so we
-  -- can confirm which one is the forces and what the parsing recovered.
-  if _G.C_UIWidgetManager and C_UIWidgetManager.GetAllWidgetsBySetID then
-    for _, setID in ipairs(FORCES_WIDGET_SET_IDS) do
-      local ok, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, setID)
-      if ok and type(widgets) == "table" and #widgets > 0 then
-        print(string.format("    widget set %d: %d widgets", setID, #widgets))
-        for _, w in ipairs(widgets) do
-          if w.widgetType == 2 and C_UIWidgetManager.GetStatusBarWidgetVisualizationInfo then
-            local ok2, info = pcall(C_UIWidgetManager.GetStatusBarWidgetVisualizationInfo, w.widgetID)
-            if ok2 and type(info) == "table" then
-              print(string.format("      [bar] id=%d barValue=%s barMax=%s tooltip=%q",
-                w.widgetID, tostring(info.barValue), tostring(info.barMax),
-                tostring(info.tooltip or "")))
-            else
-              print(string.format("      [bar] id=%s pcall=%s", tostring(w.widgetID), tostring(ok2)))
-            end
-          elseif w.widgetType == 8 and C_UIWidgetManager.GetTextWithStateWidgetVisualizationInfo then
-            local ok2, info = pcall(C_UIWidgetManager.GetTextWithStateWidgetVisualizationInfo, w.widgetID)
-            if ok2 and type(info) == "table" then
-              local parsedPct = parseForcesText(info.text)
-              print(string.format("      [text] id=%d text=%q tooltip=%q parsed=%s",
-                w.widgetID, tostring(info.text or ""), tostring(info.tooltip or ""),
-                parsedPct and string.format("%.1f%%", parsedPct) or "nil"))
-            else
-              print(string.format("      [text] id=%s pcall=%s", tostring(w.widgetID), tostring(ok2)))
-            end
-          else
-            print(string.format("      [type=%s] id=%s", tostring(w.widgetType), tostring(w.widgetID)))
-          end
-        end
-      end
-    end
-  end
-  print(string.format("    backupTicker active: %s", tostring(backupTicker ~= nil)))
-  if state.lastForcesErr then
-    print("    last forces error: |cffff6666" .. tostring(state.lastForcesErr) .. "|r")
-  end
-  -- Persistent criteria snapshot (captured every tick during the key, so
-  -- it survives across CHALLENGE_MODE_COMPLETED for post-mortem inspection).
-  if state.criteriaSnapshot then
-    local snap = state.criteriaSnapshot
-    print(string.format("    last criteria snapshot%s: numCriteria=%s, isInProgress=%s",
-      state.criteriaSnapshotAt
-        and string.format(" (%.1fs ago)", GetTime() - state.criteriaSnapshotAt) or "",
-      tostring(snap.numCriteria), tostring(snap.isInProgress)))
-    for i, c in ipairs(snap.criteria) do
-      if c.error then
-        print(string.format("      crit[%d]: pcall error=%s", i, c.error))
-      elseif c.otherType then
-        print(string.format("      crit[%d]: returned %s (not a table)", i, c.otherType))
-      else
-        print(string.format(
-          "      crit[%d]: q=%s/%s weighted=%s formatted=%s completed=%s",
-          i, tostring(c.quantity), tostring(c.totalQuantity),
-          tostring(c.isWeightedProgress), tostring(c.isFormatted),
-          tostring(c.completed)))
-        print(string.format("                 desc=%q  qStr=%q",
-          tostring(c.description or ""), tostring(c.quantityString or "")))
-      end
-    end
-  elseif state.criteriaSnapshotErr then
-    print("    last criteria snapshot: |cffff6666" .. state.criteriaSnapshotErr .. "|r")
-  else
-    print("    last criteria snapshot: none captured yet")
-  end
-
-  -- Dry-run: when not in a key, try to parse whatever route is currently
-  -- selected in MDT so the user can validate setup before going in.
-  if not state.active and _G.MDT then
-    print("  |cffaaaaaa--- dry-run parse of currently-selected MDT route ---|r")
-    local preset = getCurrentPreset()
-    if not preset then
-      print("  dry-run: no preset returned by getCurrentPreset()")
-      return
-    end
-    print("  dry-run: preset = " .. tostring(preset)
-      .. (preset.text and ("  text=" .. tostring(preset.text)) or "")
-      .. (preset.name and ("  name=" .. tostring(preset.name)) or ""))
-    if not preset.value or type(preset.value.pulls) ~= "table" then
-      print("  dry-run: preset has no .value.pulls — unexpected MDT shape")
-      return
-    end
-    local total = totalForces(preset)
-    print(string.format("  dry-run: dungeonIdx=%s, total forces=%s, pulls=%d, objects(top-level)=%s, objects(.value)=%s",
-      tostring(getDungeonIdx(preset)),
-      tostring(total),
-      #preset.value.pulls,
-      preset.objects and tostring(#preset.objects) or "nil",
-      preset.value.objects and tostring(#preset.value.objects) or "nil"))
-    -- Find note text
-    local noteText = findLustNoteText(preset)
-    if noteText then
-      print("  dry-run: matched lust note text — " .. noteText)
-      local hits = extractTargetsFromNote(noteText, preset)
-      local lead = ZugZugKeysDB.lustReminderLeadPct or 3
-      print("  dry-run: would set up " .. #hits .. " target(s) using a " .. lead .. "% lead:")
-      if #hits == 0 then
-        print("    (none — couldn't extract any pull or enemy reference)")
-      end
-      for i, h in ipairs(hits) do
-        local viaTag = h.matchVia and ("  [match=" .. h.matchVia .. "]") or ""
-        if h.kind == "pull" then
-          local cum  = cumulativeCountBeforePull(preset, h.pullIndex)
-          local pct  = (total > 0) and ((cum / total) * 100) or 0
-          local fire = (pct < 3) and "first combat" or string.format("forces ≥ %.1f%%", pct - lead)
-          local label
-          if h.name then
-            label = string.format("%s (pull %d)", h.name, h.pullIndex)
-          else
-            label = "pull " .. h.pullIndex
-          end
-          print(string.format("    [%d] %s  →  %.1f%% forces (%d / %d)  — fires at %s%s",
-            i, label, pct, cum, total, fire, viaTag))
-        else
-          print(string.format("    [%d] %s (encounterID %s)  — fires at ENCOUNTER_START%s",
-            i, h.name or "boss", tostring(h.encounterID), viaTag))
-        end
-      end
-    else
-      print("  dry-run: no lust note found in objects[]; scanning per-pull notes…")
-      local count = 0
-      for i, pull in ipairs(preset.value.pulls) do
-        local note = pull.text or pull.note or pull.notes
-        if isLustNote(note) then
-          print(string.format("  dry-run: per-pull match at pull %d — %s", i, tostring(note)))
-          count = count + 1
-        end
-      end
-      if count == 0 then
-        print("  dry-run: no per-pull lust notes matched either")
-      end
+      print(string.format("    %d. [%s] %s", i, tostring(h.kind), tostring(h)))
     end
   end
 end
 
---- Preview a Tactyks-style multi-fire sequence so you can sanity-check
---- the popup, sound, and numbering ("LUST 1/3", "LUST 2/3", "LUST 3/3")
---- without being in a live key.
---- Exhaustively scan every widget-set ID from 1..maxSet looking for
---- widgets that could be the forces display. Used to find the right set
---- when our short candidate list misses (Blizzard occasionally moves it).
-function Keys.LustReminderScan(maxSet)
-  maxSet = tonumber(maxSet) or 500
-  if not _G.C_UIWidgetManager or not C_UIWidgetManager.GetAllWidgetsBySetID then
-    print("|cffff8800ZugZug Keys:|r C_UIWidgetManager not available.")
-    return
-  end
-  print(string.format("|cffff8800ZugZug Keys:|r scanning widget sets 1..%d ...", maxSet))
-  local foundSets, total = 0, 0
-  for setID = 1, maxSet do
-    local ok, widgets = pcall(C_UIWidgetManager.GetAllWidgetsBySetID, setID)
-    if ok and type(widgets) == "table" and #widgets > 0 then
-      foundSets = foundSets + 1
-      total = total + #widgets
-      print(string.format("  set %d (%d widgets):", setID, #widgets))
-      for _, w in ipairs(widgets) do
-        if w.widgetType == 8 and C_UIWidgetManager.GetTextWithStateWidgetVisualizationInfo then
-          local ok2, info = pcall(C_UIWidgetManager.GetTextWithStateWidgetVisualizationInfo, w.widgetID)
-          if ok2 and type(info) == "table" then
-            local pct = parseForcesText(info.text)
-            print(string.format("    [text] id=%d text=%q parsed=%s",
-              w.widgetID, tostring(info.text or ""),
-              pct and string.format("%.1f%%", pct) or "nil"))
-          end
-        elseif w.widgetType == 2 and C_UIWidgetManager.GetStatusBarWidgetVisualizationInfo then
-          local ok2, info = pcall(C_UIWidgetManager.GetStatusBarWidgetVisualizationInfo, w.widgetID)
-          if ok2 and type(info) == "table" then
-            print(string.format("    [bar] id=%d val=%s/%s tooltip=%q",
-              w.widgetID, tostring(info.barValue), tostring(info.barMax),
-              tostring(info.tooltip or "")))
-          end
-        else
-          print(string.format("    [type=%s] id=%s", tostring(w.widgetType), tostring(w.widgetID)))
-        end
-      end
-    end
-  end
-  print(string.format("|cffff8800ZugZug Keys:|r scan complete — %d populated sets, %d widgets total.",
-    foundSets, total))
-end
-
---- Clear the locked forces widget ID + every widget we've recorded.
---- Useful if a wrong widget got locked early; the next UPDATE_UI_WIDGET
---- batch will re-discover the right one with the tightened heuristic.
-function Keys.LustReminderUnlock()
-  state.forcesWidgetID = nil
-  state.seenWidgets    = {}
-  print("|cffff8800ZugZug Keys:|r forces widget unlocked. Will re-discover on next widget update.")
-end
-
-function Keys.LustReminderTest()
-  -- Clear any live state so the preview is clean.
-  state.targets    = {}
-  state.source     = "test"
-  state.noteSource = "object"
-  state.routeNote  = "test sequence (no live key)"
-
-  local samples = {
-    { kind = "pull", pullIndex = 1,  targetPct = 0,  fired = false },
-    { kind = "pull", pullIndex = 6,  targetPct = 25, fired = false },
-    { kind = "pull", pullIndex = 11, targetPct = 55, fired = false },
-  }
-  for _, t in ipairs(samples) do table.insert(state.targets, t) end
-
-  print("|cffff8800ZugZug Keys:|r firing 3-alert lust preview "
-    .. "(once now, then 4s and 8s later).")
-  fireAlert(samples[1], "preview")
-  C_Timer.After(4, function() fireAlert(samples[2], "preview") end)
-  C_Timer.After(8, function() fireAlert(samples[3], "preview") end)
-  -- Clear state after the last popup auto-hides so a subsequent /zzk lust
-  -- shows the live (or empty) targets table rather than the preview.
-  C_Timer.After(18, function()
-    if state.source == "test" then state.targets = {}; state.source = nil; state.routeNote = nil end
-  end)
-end
-
---- Dump every place MDT might store presets, organised by dungeon idx
---- so we can see exactly where each route lives. Useful when a route is
---- visible in MDT's UI but the lust reminder claims none exists.
-function Keys.LustReminderDumpPresets()
-  if not _G.MDT then print("|cffff8800ZZK:|r MDT not loaded") return end
-
-  print("|cffff8800ZZK lust PRESETS (slim):|r")
-
-  -- (1) MDT:CountPresets per Midnight S1 dungeon idx — tells us where MDT
-  -- thinks routes actually exist, without us needing to know the storage path.
-  if type(MDT.CountPresets) == "function" then
-    print("  MDT:CountPresets(idx):")
-    for idx = 150, 160 do
-      local ok, count = pcall(MDT.CountPresets, MDT, idx)
-      if ok and type(count) == "number" and count > 0 then
-        local name = (MDT.dungeonList and MDT.dungeonList[idx]) or "?"
-        print(string.format("    idx=%d (%s): %d presets", idx, tostring(name), count))
-      end
-    end
-  end
-
-  -- (2) MDT:GetDB() top-level structure — find the right path for enumeration.
-  if type(MDT.GetDB) == "function" then
-    local okDB, db = pcall(MDT.GetDB, MDT)
-    if okDB and type(db) == "table" then
-      print("  MDT:GetDB() top-level:")
-      for k in pairs(db) do
-        print(string.format("    .%s = %s", tostring(k), type(db[k])))
-      end
-      if type(db.presets) == "table" then
-        local cnt = 0
-        for _ in pairs(db.presets) do cnt = cnt + 1 end
-        print(string.format("    db.presets has %d dungeon buckets", cnt))
-      end
-    end
-  end
-
-  -- (3) MythicDungeonToolsDB.global.currentPreset — your dump said 200
-  -- entries; let's see the first few to understand what's stored.
-  local svdb = _G.MythicDungeonToolsDB
-  if type(svdb) == "table" and type(svdb.global) == "table"
-      and type(svdb.global.currentPreset) == "table" then
-    print("  MythicDungeonToolsDB.global.currentPreset (first 8 keys):")
-    local i = 0
-    for k, v in pairs(svdb.global.currentPreset) do
-      i = i + 1
-      if i > 8 then break end
-      print(string.format("    [%s] = %s (%s)", tostring(k), tostring(v), type(v)))
-    end
-  end
-
-  -- (5) Original probes (kept compact).
-  local stores = {
-    { path = "MDT.db.global.presets",  t = MDT.db and MDT.db.global  and MDT.db.global.presets  },
-    { path = "MDT.db.profile.presets", t = MDT.db and MDT.db.profile and MDT.db.profile.presets },
-    { path = "MDT.db.char.presets",    t = MDT.db and MDT.db.char    and MDT.db.char.presets    },
-    { path = "MDT.presets",            t = MDT.presets                                          },
-    { path = "MDT.presetCache",        t = MDT.presetCache                                      },
-  }
-  for _, s in ipairs(stores) do
-    if type(s.t) == "table" then
-      print("  " .. s.path .. ":")
-      local found = 0
-      for idx, presets in pairs(s.t) do
-        found = found + 1
-        local dungeonName = MDT.dungeonList and MDT.dungeonList[idx]
-        local mapID = mdtMapIDForDungeon(idx)
-        local presetCount = (type(presets) == "table") and #presets or 0
-        print(string.format("    [%s] %s (mapID=%s) — %d presets",
-          tostring(idx), tostring(dungeonName or "?"),
-          tostring(mapID or "?"), presetCount))
-        if type(presets) == "table" then
-          for i, p in ipairs(presets) do
-            if i <= 5 then
-              print(string.format("      [%d] %q", i, tostring(p and p.text or "?")))
-            end
-          end
-        end
-      end
-      if found == 0 then print("    (empty table)") end
-    else
-      print("  " .. s.path .. " = " .. type(s.t))
-    end
-  end
-
-  -- Also show what the "currentPreset" pointer is per dungeon.
-  if MDT.db and MDT.db.global and type(MDT.db.global.currentPreset) == "table" then
-    print("  MDT.db.global.currentPreset (last-selected preset per dungeon):")
-    for idx, presetIdx in pairs(MDT.db.global.currentPreset) do
-      local dungeonName = MDT.dungeonList and MDT.dungeonList[idx]
-      print(string.format("    [%s] %s → presetIdx %s",
-        tostring(idx), tostring(dungeonName or "?"), tostring(presetIdx)))
-    end
-  end
-end
-
---- Dump the current MDT preset's top-level structure so we can see where
---- Tactyks (or any author) actually stores notes and per-pull counts.
-function Keys.LustReminderDump()
-  print("|cffff8800ZZK lust DUMP:|r")
+local function lustsimOne(dungeonIdx)
   if not _G.MDT then print("  MDT not loaded") return end
+  local idx = tonumber(dungeonIdx)
+  if not idx then print("  bad dungeon idx: " .. tostring(dungeonIdx)) return end
 
-  local okPreset, preset = pcall(getCurrentPreset)
-  if not okPreset then
-    print("  |cffff6666getCurrentPreset() ERRORED:|r " .. tostring(preset))
-    return
-  end
+  local dungeonName = (MDT.dungeonList and MDT.dungeonList[idx]) or "(unknown)"
+  print(string.format("|cffff8800ZZK lustsim:|r dungeonIdx=%d  name=%s",
+    idx, tostring(dungeonName)))
+
+  local preset, presetIdx = getPresetForDungeonIdx(idx)
   if not preset then
-    print("  getCurrentPreset() returned nil")
+    print("  ✗ no MDT preset for this dungeon. Open MDT, switch to it,")
+    print("    and import a route, then try again.")
     return
   end
-  print("  preset resolved: text=" .. tostring(preset.text)
-    .. "  has .value=" .. tostring(type(preset.value) == "table")
-    .. "  has .objects=" .. tostring(type(preset.objects) == "table"))
+  print(string.format("  preset[%d] = %q  (has .value=%s, has .objects=%s)",
+    presetIdx, tostring(preset.text),
+    tostring(type(preset.value) == "table"),
+    tostring(type(preset.objects) == "table")))
 
-  local function listKeys(label, t, valueDepth)
-    if type(t) ~= "table" then
-      print("  " .. label .. " is " .. type(t)) return
-    end
-    print("  " .. label .. " keys:")
-    for k, v in pairs(t) do
-      local kind = type(v)
-      local extra = ""
-      if kind == "table" then
-        local n = 0
-        for _ in pairs(v) do n = n + 1 end
-        extra = " (entries=" .. n .. ")"
-      elseif kind == "string" then
-        extra = "  -> " .. (#v <= 80 and v or v:sub(1, 80) .. "…")
-      elseif kind == "number" or kind == "boolean" then
-        extra = "  = " .. tostring(v)
-      end
-      print(string.format("    .%s = %s%s", tostring(k), kind, extra))
-    end
-  end
+  -- Forces total + dungeon meta
+  local total = totalForces(preset) or 0
+  print(string.format("  totalForces = %d", total))
 
-  listKeys("preset", preset)
-  if type(preset.value) == "table" then
-    listKeys("preset.value", preset.value)
-    if type(preset.value.pulls) == "table" and preset.value.pulls[1] then
-      print("  preset.value.pulls[1] full dump:")
-      for k, v in pairs(preset.value.pulls[1]) do
-        if type(v) == "table" then
-          local fields = {}
-          for k2, v2 in pairs(v) do
-            table.insert(fields, tostring(k2) .. "=" .. tostring(v2))
-          end
-          print(string.format("    [%s] table { %s }",
-            tostring(k), table.concat(fields, ", ")))
-        else
-          print(string.format("    [%s] = %s (%s)", tostring(k), tostring(v), type(v)))
-        end
-      end
-    end
-    -- Look anywhere notes might live (sub-keys of preset.value)
-    for _, k in ipairs({ "objects", "notes", "comments", "metadata", "freeNotes",
-                        "presetNotes", "n", "preview" }) do
-      local v = preset.value[k]
-      if v ~= nil then
-        print(string.format("  preset.value.%s = %s (type=%s)", k, tostring(v), type(v)))
-      end
-    end
-  end
-
-  -- preset.objects (TOP-LEVEL) — Tactyks puts notes here.
-  if type(preset.objects) == "table" then
-    local n = 0
-    for _ in pairs(preset.objects) do n = n + 1 end
-    print("  preset.objects (top-level) entries: " .. n)
-    for i, obj in ipairs(preset.objects) do
-      if i > 6 then break end
-      if type(obj) == "table" then
-        print("  preset.objects[" .. i .. "]:")
-        for k, v in pairs(obj) do
-          if type(v) == "string" then
-            local rep = (#v <= 120 and v) or (v:sub(1, 120) .. "…")
-            print(string.format("      .%s = string  -> %s", tostring(k), rep))
-          elseif type(v) == "table" then
-            local nn = 0
-            for _ in pairs(v) do nn = nn + 1 end
-            print(string.format("      .%s = table (entries=%d) — full dump:", tostring(k), nn))
-            for k2, v2 in pairs(v) do
-              local r2 = tostring(v2)
-              if type(v2) == "string" then
-                r2 = (#v2 <= 120 and v2) or (v2:sub(1, 120) .. "…")
-              elseif type(v2) == "table" then
-                local mm = 0
-                for _ in pairs(v2) do mm = mm + 1 end
-                r2 = "table (entries=" .. mm .. ")"
-              end
-              print(string.format("          [%s] = %s (%s)",
-                tostring(k2), r2, type(v2)))
-            end
-          else
-            print(string.format("      .%s = %s (%s)", tostring(k), tostring(v), type(v)))
-          end
-        end
-      else
-        print("  preset.objects[" .. i .. "] = " .. tostring(obj) .. " (" .. type(obj) .. ")")
-      end
+  -- Encounter Journal preview (for ordinal "first/last boss" support)
+  local bo = getDungeonBossOrder(preset)
+  if #bo > 0 then
+    print("  boss order (" .. #bo .. "):")
+    for i, b in ipairs(bo) do
+      print(string.format("    %d. %s (encID %s)",
+        i, tostring(b.name), tostring(b.encounterID)))
     end
   else
-    print("  preset.objects (top-level) = nil/" .. type(preset.objects))
+    print("  boss order: (none — EJ not ready or MDT enemies missing isBoss)")
   end
-  -- Also probe MDT's top-level enemy/totals API
-  print("  MDT.GetEnemyForces type = " .. tostring(type(MDT.GetEnemyForces)))
-  if type(MDT.GetEnemyForces) == "function" then
-    local ok, val = pcall(MDT.GetEnemyForces, MDT)
-    print("  MDT:GetEnemyForces() = " .. tostring(ok) .. " / " .. tostring(val))
-  end
-  print("  MDT.GetCurrentSubLevel type = " .. tostring(type(MDT.GetCurrentSubLevel)))
-  if type(MDT.GetCurrentSubLevel) == "function" then
-    local ok, val = pcall(MDT.GetCurrentSubLevel, MDT)
-    print("  MDT:GetCurrentSubLevel() = " .. tostring(ok) .. " / " .. tostring(val))
-  end
-  print("  MDT.dungeonEnemies type = " .. tostring(type(MDT.dungeonEnemies)))
-  if type(MDT.dungeonEnemies) == "table" then
-    local cnt = 0
-    for _ in pairs(MDT.dungeonEnemies) do cnt = cnt + 1 end
-    print("    dungeonEnemies dungeon entries = " .. cnt)
-  end
-  print("  MDT.dungeonTotalCount type = " .. tostring(type(MDT.dungeonTotalCount)))
-  if type(MDT.dungeonTotalCount) == "table" then
-    for k, v in pairs(MDT.dungeonTotalCount) do
-      print(string.format("    dungeonTotalCount[%s] = %s", tostring(k), tostring(v)))
+
+  -- Raw MDT.dungeonEnemies boss entries so we can see every field MDT
+  -- exposes for each boss. If encounterID is duplicated, we need a
+  -- different field to distinguish them.
+  if _G.MDT and MDT.dungeonEnemies and MDT.dungeonEnemies[idx] then
+    print("  raw MDT boss entries (every isBoss=true entry, every field):")
+    for slot, e in pairs(MDT.dungeonEnemies[idx]) do
+      if type(e) == "table" and e.isBoss then
+        local fields = {}
+        for k, v in pairs(e) do
+          local kind = type(v)
+          if kind == "string" or kind == "number" or kind == "boolean" then
+            table.insert(fields, string.format("%s=%s", tostring(k), tostring(v)))
+          elseif kind == "table" then
+            local n = 0
+            for _ in pairs(v) do n = n + 1 end
+            table.insert(fields, string.format("%s=table(%d)", tostring(k), n))
+          end
+        end
+        table.sort(fields)
+        print(string.format("    slot=%s  %s", tostring(slot), table.concat(fields, "  ")))
+      end
     end
+  end
+
+  -- Pure parse via findLustTargetFromPreset
+  local target = findLustTargetFromPreset(preset)
+  if not target then
+    print("  ✗ no lust target extracted from this preset.")
+    print("    Check that the preset has a Tactyks-style note containing")
+    print("    'lust' / 'bloodlust' / 'heroism' / 'BL' / 'hero' / 'drums'")
+    print("    and at least one parseable ref ('pull N', 'first boss',")
+    print("    enemy name, etc.).")
+    -- Curated fallback preview
+    if _G.ZugZugKeysLustData then
+      local mapID = mdtMapIDForDungeon(idx)
+      if mapID and ZugZugKeysLustData[mapID] then
+        local entry = ZugZugKeysLustData[mapID]
+        print(string.format("  curated fallback: encounterIDs=%s  name=%q  note=%q",
+          tostring(#(entry.encounterIDs or {})), tostring(entry.name),
+          tostring(entry.note)))
+      end
+    end
+    return
+  end
+
+  print(string.format("  ✓ lust target found — source=%s noteSource=%s totalCount=%d",
+    tostring(target.source), tostring(target.noteSource), target.totalCount or 0))
+  print(string.format("  note: %q", tostring(target.note)))
+  dumpHitList("hits", target.hits, preset, total)
+end
+
+--- Should an entry appear in the lustsim summary? We skip dungeons MDT
+--- doesn't have a real name for — those are stale/legacy slots in MDT's
+--- catalog that aren't actually in the current season, and listing 200+
+--- "(unknown)" rows just buries the useful output.
+---
+--- A dungeon counts as "shown" if it has either:
+---   * a non-empty MDT.dungeonList[idx] string longer than 1 char, OR
+---   * a successful lust target extracted (always interesting), OR
+---   * a lust note that we couldn't parse (always interesting — surface
+---     it so we can improve the parser for that case)
+local function shouldShowInSummary(idx, name, target, noteText)
+  if target then return true end
+  if noteText and noteText ~= "" then return true end
+  if type(name) == "string" and #name > 1 and name ~= "(unknown)" then
+    return true
+  end
+  return false
+end
+
+local function lustsimAll()
+  if not _G.MDT then print("  MDT not loaded") return end
+  local db = mdtGetDB()
+  if not (db and type(db.presets) == "table") then
+    print("  MDT.presets unavailable")
+    return
+  end
+  print("|cffff8800ZZK lustsim — dungeons with presets:|r")
+  local indices = {}
+  for idx in pairs(db.presets) do
+    if type(idx) == "number" then table.insert(indices, idx) end
+  end
+  table.sort(indices)
+
+  local shown, found, unparseable, hidden = 0, 0, 0, 0
+  for _, idx in ipairs(indices) do
+    local preset = getPresetForDungeonIdx(idx)
+    local name = (MDT.dungeonList and MDT.dungeonList[idx]) or "(unknown)"
+    local target = preset and findLustTargetFromPreset(preset) or nil
+    local noteText = preset and not target and findLustNoteText(preset) or nil
+
+    if shouldShowInSummary(idx, name, target, noteText) then
+      shown = shown + 1
+      if not preset then
+        print(string.format("  [%d] %s  preset missing", idx, tostring(name)))
+      elseif target then
+        found = found + 1
+        print(string.format("  [%d] %s  ✓ %d hits  (noteSource=%s)",
+          idx, tostring(name), #(target.hits or {}),
+          tostring(target.noteSource)))
+      else
+        if noteText then unparseable = unparseable + 1 end
+        print(string.format("  [%d] %s  ✗ no targets%s",
+          idx, tostring(name),
+          noteText and "  (note found but unparseable: '" ..
+            (noteText:gsub("[\r\n]+", " "):sub(1, 60)) .. "…')" or ""))
+      end
+    else
+      hidden = hidden + 1
+    end
+  end
+  print(string.format(
+    "  Summary: shown=%d  ✓ parsed=%d  ✗ unparseable notes=%d  hidden (stale MDT entries)=%d",
+    shown, found, unparseable, hidden))
+  print("Use /zzk lustsim <dungeonIdx> for a full per-dungeon dump.")
+end
+
+function Keys.LustReminderSim(arg)
+  -- Always also print the API availability check, so we can confirm the
+  -- forces-detection path is wired correctly even when we're not in a key.
+  print(string.format(
+    "|cffff8800ZZK API check:|r C_Scenario.GetStepInfo=%s  C_ScenarioInfo.GetCriteriaInfo=%s",
+    tostring(_G.C_Scenario and type(C_Scenario.GetStepInfo) or "nil"),
+    tostring(_G.C_ScenarioInfo and type(C_ScenarioInfo.GetCriteriaInfo) or "nil")))
+  local idx = tonumber(arg)
+  if idx then
+    lustsimOne(idx)
+  else
+    lustsimAll()
   end
 end

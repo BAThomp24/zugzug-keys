@@ -153,10 +153,6 @@ frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 frame:RegisterEvent("BOSS_KILL")
 frame:RegisterEvent("ENCOUNTER_END")
 frame:SetScript("OnEvent", function(_, event, arg1, ...)
-  if ZugZugKeysDB and ZugZugKeysDB.mpDebug then
-    print("|cffFFAA00ZZK evt:|r " .. tostring(event)
-      .. (arg1 ~= nil and (" arg1=" .. tostring(arg1)) or ""))
-  end
   if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
     ensureDefaults()
     return

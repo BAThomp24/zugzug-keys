@@ -137,12 +137,6 @@ SlashCmdList["ZUGZUGKEYS"] = function(msg)
     if not ok then print("|cff8fbf3fZugZug Keys:|r Could not open settings.") end
     return
   end
-  if cmd == "debug" then
-    ZugZugKeysDB.mpDebug = not ZugZugKeysDB.mpDebug
-    print("|cff8fbf3fZugZug Keys:|r debug "
-      .. (ZugZugKeysDB.mpDebug and "|cff4DFF4Don|r" or "|cffFF6666off|r"))
-    return
-  end
   if cmd == "refresh" then
     if Keys.refreshStatus then
       Keys.refreshStatus()
@@ -152,39 +146,10 @@ SlashCmdList["ZUGZUGKEYS"] = function(msg)
     end
     return
   end
-  if cmd == "forcebcast" or cmd == "force" then
-    if not Keys.sendStatusNow then
-      print("|cff8fbf3fZugZug Keys:|r forcebcast unavailable (Status module not loaded)")
-      return
-    end
-    local rest = msg:match("^%S+%s+(.+)$")
-    local text = rest or ("ZZK test " .. date("%H:%M:%S"))
-    local bn = Keys.sendStatusNow(text)
-    print(string.format("|cff8fbf3fZugZug Keys:|r forced broadcast: '%s'  (bn=%s)", text, tostring(bn)))
-    if not ZugZugKeysDB.bnStatus then
-      print("  |cffFF6666BNet toggle is off — nothing was sent.|r")
-    end
-    return
-  end
-  if cmd == "status" then
-    print("|cff8fbf3fZugZug Keys:|r feature toggles —")
-    print("  BNet Status: " .. (ZugZugKeysDB.bnStatus and "|cff4DFF4Don|r" or "|cffFF6666off|r"))
-    print("  Group Key Info: " .. (ZugZugKeysDB.groupKeyInfo and "|cff4DFF4Don|r" or "|cffFF6666off|r"))
-    print("  Friends List Overlay: " .. (ZugZugKeysDB.friendsListOverlay and "|cff4DFF4Don|r" or "|cffFF6666off|r"))
-    return
-  end
   if cmd == "friends" or cmd == "refreshfriends" then
     if Keys.RefreshFriendsListOverlay then
       Keys.RefreshFriendsListOverlay()
       print("|cff8fbf3fZugZug Keys:|r friends list overlay refreshed")
-    end
-    return
-  end
-  if cmd == "friendsdebug" or cmd == "fdebug" then
-    if Keys.DumpFriendsListDebug then
-      Keys.DumpFriendsListDebug()
-    else
-      print("|cff8fbf3fZugZug Keys:|r friends debug unavailable")
     end
     return
   end
@@ -195,55 +160,17 @@ SlashCmdList["ZUGZUGKEYS"] = function(msg)
     end
     return
   end
-  if cmd == "testbcast" or cmd == "testbroadcast" then
-    local s = Keys.state
-    print("|cff8fbf3fZugZug Keys:|r diagnostic —")
-    print(string.format("  inActiveKey=%s · keyName=%s · keyLevel=%s · keyTimeLimit=%s",
-      tostring(s.inActiveKey), tostring(s.keyName), tostring(s.keyLevel), tostring(s.keyTimeLimit)))
-    print(string.format("  setting bnStatus=%s · API BNSetCustomMessage=%s",
-      tostring(ZugZugKeysDB.bnStatus), tostring(BNSetCustomMessage ~= nil)))
-    if BNSetCustomMessage then
-      local ok, err = pcall(BNSetCustomMessage, "ZZK test " .. date("%H:%M:%S"))
-      print("  BNSetCustomMessage call: ok=" .. tostring(ok) .. (ok and "" or (" err=" .. tostring(err))))
-    end
-    return
-  end
-  if cmd == "luststatus" or cmd == "lust" then
-    if Keys.LustReminderStatus then Keys.LustReminderStatus() end
-    return
-  end
-  if cmd == "lusttest" then
-    if Keys.LustReminderTest then Keys.LustReminderTest() end
-    return
-  end
-  if cmd == "lustdump" then
-    if Keys.LustReminderDump then Keys.LustReminderDump() end
-    return
-  end
-  if cmd:sub(1, 8) == "lustscan" then
-    local rest = cmd:match("lustscan%s+(%d+)")
-    if Keys.LustReminderScan then Keys.LustReminderScan(rest) end
-    return
-  end
-  if cmd == "lustunlock" then
-    if Keys.LustReminderUnlock then Keys.LustReminderUnlock() end
-    return
-  end
-  if cmd == "lustpresets" then
-    if Keys.LustReminderDumpPresets then Keys.LustReminderDumpPresets() end
+  if cmd:sub(1, 7) == "lustsim" then
+    -- /zzk lustsim                  — summary across every MDT dungeon
+    -- /zzk lustsim 1                — full dump for dungeonIdx 1
+    local rest = msg:match("^%S+%s+(%S+)")
+    if Keys.LustReminderSim then Keys.LustReminderSim(rest) end
     return
   end
   print("|cff8fbf3fZugZug Keys|r — Mythic+ tools")
   print("  /zzk settings  — open the settings panel")
-  print("  /zzk status    — show which features are on")
   print("  /zzk refresh   — re-fire the key-start broadcast for the current key")
-  print("  /zzk forcebcast [text] — push text to BNet (works outside a key)")
-  print("  /zzk testbcast — diagnose the BNet broadcast API")
   print("  /zzk hideinfo  — close the group key info box")
   print("  /zzk friends   — manually refresh the friends list overlay")
-  print("  /zzk friendsdebug — diagnose what UI is exposing in your client")
-  print("  /zzk lust      — show lust reminder status for current key")
-  print("  /zzk lusttest  — fire a test lust alert")
-  print("  /zzk lustscan [maxSet]  — sweep widget sets 1..maxSet (default 500) for the forces widget")
-  print("  /zzk debug     — toggle verbose event logging")
+  print("  /zzk lustsim [dungeonIdx]  — preview lust-target parsing for any MDT route")
 end

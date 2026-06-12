@@ -1,0 +1,60 @@
+name: Release
+
+# Mirrors zugzug-addon's release pipeline: builds a ZugZugKeys.zip and
+# creates (or updates) a date-tagged GitHub Release so CurseForge's
+# auto-sync has something to pull. CurseForge polls GitHub Releases via
+# the linked project (X-Curse-Project-ID: zugzug-keys in the TOC), so
+# there's no CF API token required here — just publish the release.
+
+on:
+  push:
+    branches: [main]
+    # Skip release runs for purely-docs / meta changes — they don't
+    # change the addon's runtime behaviour, so no need to ship.
+    paths-ignore:
+      - "README.md"
+      - ".gitignore"
+      - ".github/**"
+  workflow_dispatch: # manual trigger from the Actions tab
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # required to create releases + push tags
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute date-based version tag
+        id: version
+        run: echo "tag=v$(date -u +%Y.%m.%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Build ZugZugKeys.zip
+        # Bundle the TOC + every .lua module. Anything else listed in
+        # .pkgmeta's ignore section is excluded explicitly.
+        run: |
+          zip -r ZugZugKeys.zip \
+            ZugZugKeys.toc \
+            Core.lua \
+            Status.lua \
+            KeyInfo.lua \
+            FriendsList.lua \
+            LustData.lua \
+            LustReminder.lua \
+            Settings.lua
+
+      - name: Create or update GitHub Release
+        # softprops/action-gh-release updates the release in place if
+        # the tag already exists (multiple pushes per day → one release
+        # per day, with the latest zip attached).
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ZugZug Keys ${{ steps.version.outputs.tag }}
+          body: |
+            Mythic+ tools and tweaks — companion addon to [ZugZug](https://zugzug.info).
+
+            Download `ZugZugKeys.zip` and extract into your
+            `Interface/AddOns/` folder, or install via CurseForge/WoWUp.
+          files: ZugZugKeys.zip
