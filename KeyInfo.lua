@@ -469,6 +469,26 @@ local function snapshotApplication(resultID)
   return { title = title, dungeon = dungeon, mapID = mapID }
 end
 
+--- Build the same snapshot shape from the player's OWN active LFG
+--- listing (the listing they posted as leader). Used by the
+--- group-fills-up path so leaders see the popup too, not just joiners.
+local function snapshotOwnListing()
+  if not (C_LFGList and C_LFGList.GetActiveEntryInfo) then return nil end
+  local ok, info = pcall(C_LFGList.GetActiveEntryInfo)
+  if not ok or type(info) ~= "table" then return nil end
+
+  local title = info.name
+  local activityID = info.activityID
+  if not activityID and type(info.activityIDs) == "table" then
+    activityID = info.activityIDs[1]
+  end
+  local dungeon, mapID = resolveActivity(activityID)
+  if not dungeon or dungeon == "" then dungeon = "Mythic+" end
+
+  if (not title or title == "") and not dungeon then return nil end
+  return { title = title, dungeon = dungeon, mapID = mapID }
+end
+
 ----------------------------------------------------------------------
 -- Public API (called from Settings.lua and slash commands)
 ----------------------------------------------------------------------
@@ -511,10 +531,21 @@ local function isInTrackedInstance()
   return true
 end
 
+-- Track whether we've already shown the popup for the current "group is
+-- full" state, so GROUP_ROSTER_UPDATE doesn't re-fire every time someone
+-- swaps spec / a ready check fires / etc. while still at 5 members.
+-- Reset whenever the party drops below 5 (so re-fill triggers a new
+-- popup) or we leave the group entirely.
+local shownForCurrentFullGroup = false
+
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("LFG_LIST_APPLICATION_STATUS_UPDATED")
+-- Group composition changes. We watch for the moment the party hits 5
+-- members so leaders / direct-invitees (who never went through LFG
+-- application status events) also see the popup when their group fills.
+frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 -- Hide the popup when the player finishes casting the teleport — that's
 -- their explicit "I'm done with this popup" signal. We use a unit-filtered
 -- registration so the event ONLY fires for the player's own casts (no
@@ -558,6 +589,30 @@ frame:SetScript("OnEvent", function(_, event, ...)
         or newStatus == "invitedeclined" then
       pendingApps[resultID] = nil
     end
+    return
+  end
+
+  if event == "GROUP_ROSTER_UPDATE" then
+    if not ZugZugKeysDB.groupKeyInfo then return end
+    local size = GetNumGroupMembers and GetNumGroupMembers() or 0
+    -- M+ groups are exactly 5. Below that we reset the dedup flag so the
+    -- next time the group fills we get one fresh popup. Above that
+    -- (raid contexts) we ignore — the box is intended for 5-man M+.
+    if size < 5 then
+      shownForCurrentFullGroup = false
+      return
+    end
+    if size > 5 then return end
+    -- Exactly 5 members. Only fire once per fill-up event.
+    if shownForCurrentFullGroup then return end
+    -- Pull dungeon info from our own listing (we're the leader, or a
+    -- direct invitee in a leader-listed group). If there's no listing
+    -- (e.g. a hand-rolled group with no LFG entry), there's nothing
+    -- useful to display — skip.
+    local snap = snapshotOwnListing()
+    if not snap then return end
+    showSnapshot(snap)
+    shownForCurrentFullGroup = true
     return
   end
 

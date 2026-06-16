@@ -29,6 +29,15 @@ local DEFAULTS = {
   lustReminderSound = true,         -- play a sound on alert
   lustReminderCuratedFallback = true, -- use curated boss-N fallback when MDT route has no marker
   lustReminderDebug = false,        -- chat-print diagnostic info
+  -- Targeted Spells (incoming enemy casts on party members, shown on DandersFrames)
+  targetedSpells = false,           -- master toggle (off by default — opt-in; needs DandersFrames)
+  targetedSpellsShowAll = false,    -- false = important spells only (C_Spell.IsSpellImportant)
+  targetedSpellsSize = 28,          -- icon size in px
+  targetedSpellsAnchor = "CENTER",  -- 9-point anchor on the DF frame
+  targetedSpellsOffsetX = 0,
+  targetedSpellsOffsetY = 0,
+  targetedSpellsMax = 3,            -- max simultaneous icons per frame
+  targetedSpellsDebug = false,      -- chat-print diagnostic info
 }
 Keys.DEFAULTS = DEFAULTS
 

@@ -1,4 +1,4 @@
-## Interface: 120005
+## Interface: 120007
 ## Title: ZugZug Keys — Mythic+ Tools
 ## Notes: Mythic+ tools and tweaks — a companion to ZugZug. Broadcasts your key start time + estimated finish to your BNet status. More features coming.
 ## Author: ZUGZUG.io
@@ -8,6 +8,7 @@
 ## X-Website: https://zugzug.info
 ## X-Curse-Project-ID: zugzug-keys
 ## X-Category: Dungeons & Raids
+## OptionalDeps: DandersFrames
 
 Core.lua
 Status.lua
@@ -15,4 +16,5 @@ KeyInfo.lua
 FriendsList.lua
 LustData.lua
 LustReminder.lua
+TargetedSpells.lua
 Settings.lua

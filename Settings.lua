@@ -96,6 +96,21 @@ local function CreateSettingsPanel()
   local lustFallbackToggle = CreateToggle(canvas, 32, -390, "Use curated boss fallback", "lustReminderCuratedFallback")
   local lustDebugToggle = CreateToggle(canvas, 32, -420, "Debug logging", "lustReminderDebug")
 
+  -- Targeted Spells
+  local tsAvail = _G.DandersFrames_IsReady ~= nil
+  local tsToggle = CreateToggle(canvas, 16, -470, "Targeted Spells", "targetedSpells",
+    "(icon on a party member's DandersFrames frame when an enemy casts at them)",
+    function() if Keys.UpdateTargetedSpellsFeature then Keys.UpdateTargetedSpellsFeature() end end)
+  local tsNote = CreateNote(canvas, tsToggle,
+    tsAvail
+      and "Active in 5-man dungeons + M+. Identifies the targeted member by class/role/race/sex (12.0-safe). Shows nothing when two members are indistinguishable."
+      or  "|cffff6666Requires the DandersFrames addon, which isn't loaded.|r Install/enable DandersFrames to use this.")
+
+  local tsAllToggle = CreateToggle(canvas, 32, -520, "Show all targeted casts", "targetedSpellsShowAll",
+    "(off = important spells only)",
+    function() if Keys.UpdateTargetedSpellsFeature then Keys.UpdateTargetedSpellsFeature() end end)
+  local tsDebugToggle = CreateToggle(canvas, 32, -550, "Debug logging", "targetedSpellsDebug")
+
   return canvas
 end
 
