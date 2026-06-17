@@ -26,14 +26,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compute date-based version tag
+      - name: Compute version tag
         id: version
-        run: echo "tag=v$(date -u +%Y.%m.%d)" >> "$GITHUB_OUTPUT"
+        # Include HHMM so every release is a UNIQUE tag. CurseForge only
+        # re-syncs on a *new* release tag — updating the asset on an
+        # existing tag is silently ignored — so a date-only tag meant a
+        # second push the same day never reached CurseForge.
+        run: echo "tag=v$(date -u +%Y.%m.%d.%H%M)" >> "$GITHUB_OUTPUT"
 
       - name: Build ZugZugKeys.zip
-        # Bundle the TOC + every .lua module. Anything else listed in
-        # .pkgmeta's ignore section is excluded explicitly.
+        # Substitute the @project-version@ token with the real tag so the
+        # in-game Version field shows a meaningful value (our custom
+        # pipeline doesn't run the CurseForge packager that normally does
+        # this). The checkout is disposable, so editing in place is fine.
+        # Then bundle the TOC + every .lua module; anything in .pkgmeta's
+        # ignore section is excluded by listing files explicitly.
         run: |
+          sed -i "s/@project-version@/${{ steps.version.outputs.tag }}/" ZugZugKeys.toc
           zip -r ZugZugKeys.zip \
             ZugZugKeys.toc \
             Core.lua \
@@ -44,10 +53,7 @@ jobs:
             LustReminder.lua \
             Settings.lua
 
-      - name: Create or update GitHub Release
-        # softprops/action-gh-release updates the release in place if
-        # the tag already exists (multiple pushes per day → one release
-        # per day, with the latest zip attached).
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
