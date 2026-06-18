@@ -8,7 +8,6 @@
 ## X-Website: https://zugzug.info
 ## X-Curse-Project-ID: zugzug-keys
 ## X-Category: Dungeons & Raids
-## OptionalDeps: DandersFrames
 
 Core.lua
 Status.lua
@@ -16,5 +15,4 @@ KeyInfo.lua
 FriendsList.lua
 LustData.lua
 LustReminder.lua
-TargetedSpells.lua
 Settings.lua
