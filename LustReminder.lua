@@ -1344,8 +1344,6 @@ local function loadTargetForCurrentKey()
           (t.name or "boss") .. " (encID " .. tostring(t.encounterID) .. ")")
       end
     end
-    debug(string.format("MDT lust note (%s) parsed %d targets — note: %q",
-      tostring(mdt.noteSource), count, tostring(mdt.note)))
     local preFix = state.presetName
       and string.format(" using route '%s'", state.presetName) or ""
     if count > 0 then
@@ -1455,21 +1453,6 @@ end
 ---       instance ID for every boss).
 local function onEncounterStart(encounterID, encounterName)
   if not state.active then return end
-  -- Diagnostic line: one print per boss engage during an active key,
-  -- so we can see exactly what fired and what targets were considered.
-  -- Quiet, useful, only fires when state.active so it stays out of the
-  -- way outside keys.
-  local pending = {}
-  for _, t in ipairs(state.targets) do
-    if not t.fired and t.kind == "boss" then
-      table.insert(pending, tostring(t.name or ("encID " .. tostring(t.encounterID))))
-    end
-  end
-  print(string.format(
-    "|cffff8800ZZK boss engage:|r %q (encID %s)  pending: %s",
-    tostring(encounterName), tostring(encounterID),
-    (#pending > 0) and table.concat(pending, ", ") or "(none)"))
-
   for _, t in ipairs(state.targets) do
     if not t.fired and t.kind == "boss" then
       local matched = bossNamesMatch(t.name, encounterName)
