@@ -78,47 +78,6 @@ local function getChallengeDungeonNames()
   return out
 end
 
--- Words common to many dungeon names that, on their own, don't uniquely
--- identify a single dungeon. We don't fuzzy-match on these.
-local TELEPORT_NAME_STOPWORDS = {
-  ["the"]=true, ["of"]=true, ["and"]=true, ["to"]=true,
-  ["pit"]=true, ["city"]=true, ["palace"]=true, ["chamber"]=true,
-  ["temple"]=true, ["court"]=true, ["dawn"]=true, ["dusk"]=true,
-  ["dark"]=true, ["high"]=true, ["lower"]=true, ["upper"]=true,
-  ["new"]=true, ["old"]=true, ["nexus"]=true, -- ambiguous: Nexus-Point Xenas
-  ["point"]=true,
-}
-
---- Look up a spell ID from its display name. We try every API that
---- accepts a name string — different ones work for different categories
---- of spell (achievement rewards behave differently from class spells).
-local function spellIDFromName(name)
-  if type(name) ~= "string" or name == "" then return nil end
-  -- Legacy global. Returns 7 values; the spellID is the 7th return value
-  -- (or the last one across versions). Accepts a name string reliably.
-  if _G.GetSpellInfo then
-    local ok, _, _, _, _, _, _, spellID = pcall(GetSpellInfo, name)
-    if ok and type(spellID) == "number" and spellID > 0 then return spellID end
-  end
-  -- Modern Spell mixin — typically the canonical path in 12.0.
-  if _G.Spell and Spell.CreateFromSpellName then
-    local ok, spell = pcall(Spell.CreateFromSpellName, name)
-    if ok and spell and spell.GetSpellID then
-      local id = spell:GetSpellID()
-      if type(id) == "number" and id > 0 then return id end
-    end
-  end
-  -- New namespace fallback. Doesn't always accept names but worth a shot.
-  if C_Spell and C_Spell.GetSpellInfo then
-    local ok, info = pcall(C_Spell.GetSpellInfo, name)
-    if ok and type(info) == "table" and type(info.spellID) == "number"
-        and info.spellID > 0 then
-      return info.spellID
-    end
-  end
-  return nil
-end
-
 --- Best-effort check that the player owns a spell. Several APIs report
 --- ownership in different ways depending on how the spell was granted
 --- (learned, achievement reward, expansion-feature unlock, etc.) so we
@@ -317,7 +276,9 @@ local function buildFrame()
     "SecureActionButtonTemplate,BackdropTemplate")
   f.teleport:SetSize(110, 22)
   f.teleport:SetPoint("BOTTOM", f, "BOTTOM", 0, 10)
-  f.teleport:RegisterForClicks("AnyDown", "AnyUp")
+  -- Down only: registering both Down and Up fires the secure action twice
+  -- (the release attempts a second cast mid-teleport → UI error noise).
+  f.teleport:RegisterForClicks("AnyDown")
   if f.teleport.SetBackdrop then
     f.teleport:SetBackdrop({
       bgFile   = "Interface\\Buttons\\WHITE8x8",
@@ -367,10 +328,29 @@ local function ensureWidget()
   return widget
 end
 
+--- Remaining cooldown seconds on a teleport, or 0 when castable.
+local function teleportCooldownRemaining(spellID)
+  if not (C_Spell and C_Spell.GetSpellCooldown) then return 0 end
+  local ok, info = pcall(C_Spell.GetSpellCooldown, spellID)
+  if ok and type(info) == "table" then
+    local remaining = (info.startTime or 0) + (info.duration or 0) - GetTime()
+    if (info.duration or 0) > 1.5 and remaining > 0.1 then return remaining end
+  end
+  return 0
+end
+
+local function formatCdShort(seconds)
+  if seconds >= 90 * 60 then return math.floor(seconds / 3600 + 0.5) .. "h" end
+  if seconds >= 90 then return math.floor(seconds / 60 + 0.5) .. "m" end
+  return math.floor(seconds + 0.5) .. "s"
+end
+
 --- Refresh the teleport button's visibility + bound spell. Combat-safe:
 --- we only mutate secure attributes outside lockdown. When in combat we
 --- leave the button state as-is and let the next out-of-combat refresh
---- catch up.
+--- catch up. Owned-but-on-cooldown teleports show as an inert button with
+--- the remaining time instead of hiding entirely.
+local cdTicker
 local function refreshTeleportButton()
   if not widget or not widget.teleport then return end
   local btn = widget.teleport
@@ -378,24 +358,45 @@ local function refreshTeleportButton()
 
   local snap = ZugZugKeysDB.pendingKeyInfo
   local spellID = snap and teleportSpellIDForSnap(snap)
-  local ready = spellID and isTeleportReady(spellID)
+  local owned = spellID and isSpellOwned(spellID) or false
+  local remaining = owned and teleportCooldownRemaining(spellID) or 0
+  local ready = owned and remaining <= 0
 
   if ZugZugKeysDB.groupKeyInfoDebug then
     print(string.format(
-      "|cffff8800ZZK refreshTeleportButton:|r snap.mapID=%s  snap.dungeon=%q  spellID=%s  ready=%s",
+      "|cffff8800ZZK refreshTeleportButton:|r snap.mapID=%s  snap.dungeon=%q  spellID=%s  ready=%s  cd=%.0fs",
       tostring(snap and snap.mapID),
       tostring(snap and snap.dungeon or ""),
       tostring(spellID),
-      tostring(ready)))
+      tostring(ready),
+      remaining))
   end
 
   if ready then
     btn:SetAttribute("type", "spell")
     btn:SetAttribute("spell", spellID)
     btn.spellID = spellID
+    btn.text:SetText("Teleport")
+    btn.text:SetTextColor(1, 0.96, 0.74)
+    if btn.SetBackdropBorderColor then
+      btn:SetBackdropBorderColor(0.56, 0.75, 0.25, 0.85)
+    end
     btn:Show()
     -- Grow the parent frame so the centered button has its own row and
     -- doesn't sit on top of the dungeon-name text.
+    widget:SetHeight(FRAME_HEIGHT_WITH_BUTTON)
+  elseif owned then
+    -- On cooldown: keep it visible with the remaining time (tooltip still
+    -- works via btn.spellID) but no cast attribute, so clicks are inert.
+    btn:SetAttribute("type", nil)
+    btn:SetAttribute("spell", nil)
+    btn.spellID = spellID
+    btn.text:SetText("Teleport — " .. formatCdShort(remaining))
+    btn.text:SetTextColor(0.62, 0.62, 0.62)
+    if btn.SetBackdropBorderColor then
+      btn:SetBackdropBorderColor(0.4, 0.42, 0.36, 0.6)
+    end
+    btn:Show()
     widget:SetHeight(FRAME_HEIGHT_WITH_BUTTON)
   else
     btn:SetAttribute("type", nil)
@@ -404,6 +405,23 @@ local function refreshTeleportButton()
     btn:Hide()
     widget:SetHeight(FRAME_HEIGHT_NO_BUTTON)
   end
+
+  -- Keep the countdown fresh while the box is up and a cooldown runs.
+  if owned and remaining > 0 then
+    if not cdTicker then
+      cdTicker = C_Timer.NewTicker(10, function()
+        if widget and widget:IsShown() then
+          pcall(refreshTeleportButton)
+        elseif cdTicker then
+          cdTicker:Cancel()
+          cdTicker = nil
+        end
+      end)
+    end
+  elseif cdTicker then
+    cdTicker:Cancel()
+    cdTicker = nil
+  end
 end
 
 local function showSnapshot(snap)
@@ -411,7 +429,14 @@ local function showSnapshot(snap)
   ZugZugKeysDB.pendingKeyInfo = snap
   local w = ensureWidget()
   w.title:SetText(snap.title and snap.title ~= "" and snap.title or "[no title]")
-  w.dungeon:SetText(snap.dungeon or "")
+  -- Keystone-level chip: listings usually carry "+15" in the free-text
+  -- title — surface it on the dungeon line unless it already shows one.
+  local dungeonText = snap.dungeon or ""
+  local lvl = snap.title and snap.title:match("%+%s?(%d%d?)")
+  if lvl and not dungeonText:find("%+%d") then
+    dungeonText = dungeonText .. "  |cffffd078+" .. lvl .. "|r"
+  end
+  w.dungeon:SetText(dungeonText)
   w:Show()
   refreshTeleportButton()
 end
@@ -419,6 +444,10 @@ end
 local function hideKeyInfo()
   ZugZugKeysDB.pendingKeyInfo = nil
   if widget then widget:Hide() end
+  if cdTicker then
+    cdTicker:Cancel()
+    cdTicker = nil
+  end
 end
 
 ----------------------------------------------------------------------
@@ -448,6 +477,18 @@ local function resolveActivity(activityID)
   return name, mapID
 end
 
+--- True if the LFG activity is a Mythic+ activity. Fails OPEN (returns
+--- true) when the API or field is unavailable, so an API rename degrades
+--- to the old behavior instead of silently killing the feature.
+local function isMythicPlusActivity(activityID)
+  if not activityID then return true end
+  if not (C_LFGList and C_LFGList.GetActivityInfoTable) then return true end
+  local ok, info = pcall(C_LFGList.GetActivityInfoTable, activityID)
+  if not ok or type(info) ~= "table" then return true end
+  if info.isMythicPlusActivity == nil then return true end
+  return info.isMythicPlusActivity == true
+end
+
 local function snapshotApplication(resultID)
   if not (C_LFGList and C_LFGList.GetSearchResultInfo) then return nil end
   local ok, info = pcall(C_LFGList.GetSearchResultInfo, resultID)
@@ -459,6 +500,9 @@ local function snapshotApplication(resultID)
   if not activityID and type(info.activityIDs) == "table" then
     activityID = info.activityIDs[1]
   end
+  -- This box is an M+ feature — don't pop it for raid/questing/custom
+  -- listings (the fallback label below would mislabel them "Mythic+").
+  if not isMythicPlusActivity(activityID) then return nil end
   local dungeon, mapID = resolveActivity(activityID)
 
   -- Final fallback so the dungeon line isn't blank when the listing's
@@ -482,6 +526,7 @@ local function snapshotOwnListing()
   if not activityID and type(info.activityIDs) == "table" then
     activityID = info.activityIDs[1]
   end
+  if not isMythicPlusActivity(activityID) then return nil end
   local dungeon, mapID = resolveActivity(activityID)
   if not dungeon or dungeon == "" then dungeon = "Mythic+" end
 
@@ -537,11 +582,44 @@ end
 -- Reset whenever the party drops below 5 (so re-fill triggers a new
 -- popup) or we leave the group entirely.
 local shownForCurrentFullGroup = false
+-- Dedup for the "group has an active listing" trigger. The active entry is
+-- group-scoped (readable by any member, not just the leader — confirmed in
+-- Blizzard's own LFGList.lua: the ACTIVE_ENTRY_UPDATE handler isn't
+-- leadership-gated and non-leaders/assistants read GetActiveEntryInfo).
+-- The signal fires repeatedly (creation, edits, applicant churn), so we
+-- show on the rising edge only and re-arm when the listing goes away.
+local shownForActiveEntry = false
+
+--- Show the popup if the player's group currently has an active LFG
+--- listing. Works whether YOU listed it (leader) or a groupmate's leader
+--- did (member) — GetActiveEntryInfo reflects the group's entry for all
+--- members. Called from both LFG_LIST_ACTIVE_ENTRY_UPDATE (fires for the
+--- listing owner) and GROUP_ROSTER_UPDATE (catches members for whom the
+--- entry event may not fire, e.g. you were invited into an already-listed
+--- group).
+local function tryShowFromActiveEntry()
+  if not ZugZugKeysDB.groupKeyInfo then return end
+  local hasEntry = C_LFGList and C_LFGList.HasActiveEntryInfo
+    and C_LFGList.HasActiveEntryInfo()
+  if not hasEntry then
+    shownForActiveEntry = false  -- delisted → re-arm for the next listing
+    return
+  end
+  if shownForActiveEntry then return end  -- rising edge only
+  local snap = snapshotOwnListing()
+  if not snap then return end
+  showSnapshot(snap)
+  shownForActiveEntry = true
+end
 
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("LFG_LIST_APPLICATION_STATUS_UPDATED")
+-- Your own (or your group leader's) listing being created/updated. This is
+-- the "my key is being listed" trigger — the popup should appear the moment
+-- you post the group, before anyone applies and before it fills.
+frame:RegisterEvent("LFG_LIST_ACTIVE_ENTRY_UPDATE")
 -- Group composition changes. We watch for the moment the party hits 5
 -- members so leaders / direct-invitees (who never went through LFG
 -- application status events) also see the popup when their group fills.
@@ -554,6 +632,10 @@ frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 if frame.RegisterUnitEvent then
   frame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
 end
+-- refreshTeleportButton is a deliberate no-op during combat lockdown —
+-- catch up as soon as combat ends so a snapshot shown mid-combat can't
+-- keep a stale teleport bound.
+frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 frame:SetScript("OnEvent", function(_, event, ...)
   if event == "PLAYER_LOGIN" then
     -- Discover M+ teleport spells lazily so a discovery failure can't
@@ -592,8 +674,17 @@ frame:SetScript("OnEvent", function(_, event, ...)
     return
   end
 
+  if event == "LFG_LIST_ACTIVE_ENTRY_UPDATE" then
+    tryShowFromActiveEntry()
+    return
+  end
+
   if event == "GROUP_ROSTER_UPDATE" then
     if not ZugZugKeysDB.groupKeyInfo then return end
+    -- Catch the member case: if you're in a group that already has an
+    -- active listing (you were invited into a listed group, or the
+    -- ACTIVE_ENTRY_UPDATE event didn't fire for you), this picks it up.
+    tryShowFromActiveEntry()
     local size = GetNumGroupMembers and GetNumGroupMembers() or 0
     -- M+ groups are exactly 5. Below that we reset the dedup flag so the
     -- next time the group fills we get one fresh popup. Above that
@@ -613,6 +704,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if not snap then return end
     showSnapshot(snap)
     shownForCurrentFullGroup = true
+    return
+  end
+
+  if event == "PLAYER_REGEN_ENABLED" then
+    pcall(refreshTeleportButton)
     return
   end
 

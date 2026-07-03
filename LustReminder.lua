@@ -22,7 +22,10 @@ local Keys = _G.ZugZugKeys
 -- the short abbreviations (BL / TW / HERO) only match as standalone
 -- whitespace-delimited tokens so we don't false-positive on things like
 -- "Blast" or "blow up".
-local LUST_LONG = { "lust", "bloodlust", "heroism", "warp", "drums" }
+-- "warp" is deliberately NOT a long-form keyword: as a bare substring it
+-- matches mob names like "Warpcaster" in trash notes. The token form in
+-- LUST_SHORT plus "time warp" below cover the legitimate phrasings.
+local LUST_LONG = { "lust", "bloodlust", "heroism", "time warp", "timewarp", "drums" }
 local LUST_SHORT = { " bl ", " tw ", " hero ", " warp " }
 
 --- Negation patterns — notes like "Better to not lust here" or "skip
@@ -191,24 +194,6 @@ local function detectCurrentDungeonIdx()
   return nil, "no signal matched"
 end
 
---- Given an active key's challenge map ID, return the user's most-recent
---- preset for that specific dungeon — even if MDT's UI is currently
---- displaying a different dungeon. Returns nil if no preset exists.
-local function presetForActiveMapID(activeMapID)
-  if not activeMapID or not _G.MDT then return nil end
-  local db = mdtGetDB()
-  if not db or type(db.presets) ~= "table" then return nil end
-  local dungeonIdx = mdtDungeonIdxForMapID(activeMapID)
-  if not dungeonIdx then return nil end
-  local presets = db.presets[dungeonIdx]
-  if type(presets) ~= "table" then return nil end
-  -- MDT keeps the per-dungeon last-selected preset index in db.currentPreset.
-  local presetIdx = (type(db.currentPreset) == "table"
-                      and db.currentPreset[dungeonIdx])
-                    or 1
-  return presets[presetIdx], dungeonIdx, presetIdx
-end
-
 --- Sum one MDT pull's enemy count. Pull table shape (Tactyks / modern MDT):
 ---     pull[npc_slot] = { instance1, instance2, … }
 ---     pull.color     = "ff3eff"
@@ -288,9 +273,11 @@ local function getCurrentPreset()
   end
   local dbFallback = mdtGetDB()
   if dbFallback and type(dbFallback.presets) == "table" then
-    local dispIdx = MDT.GetCurrentSubLevel
-      and (pcall(MDT.GetCurrentSubLevel, MDT) and MDT:GetCurrentSubLevel())
-      or dbFallback.currentDungeonIdx
+    -- currentDungeonIdx is MDT's last-displayed DUNGEON index. (An older
+    -- revision used GetCurrentSubLevel here, but that's a floor index
+    -- within one dungeon — indexing presets with it picked a random
+    -- other dungeon's route.)
+    local dispIdx = dbFallback.currentDungeonIdx
     if dispIdx and dbFallback.presets[dispIdx] then
       local presets = dbFallback.presets[dispIdx]
       local idx = (type(dbFallback.currentPreset) == "table"
@@ -779,45 +766,6 @@ local function extractTargetsFromNote(noteText, preset)
   return out
 end
 
---- Legacy helper kept for the dump/diagnostic paths. Walks the same
---- pull-N regex extractTargetsFromNote uses but in a simpler shape.
-local function extractPullRefs(text)
-  if type(text) ~= "string" then return {} end
-  local found, seen = {}, {}
-  for n in text:lower():gmatch("pull%s+(%d+)") do
-    local num = tonumber(n)
-    if num and not seen[num] then
-      seen[num] = true
-      table.insert(found, num)
-    end
-  end
-  return found
-end
-
---- Resolve boss names mentioned in the lust note to encounterIDs by
---- cross-referencing MDT.dungeonEnemies for the active dungeon. Catches
---- "Araknath" / "High Sage" tokens in a Tactyks note.
-local function extractBossEncounterIDs(noteText, preset)
-  if type(noteText) ~= "string" or not _G.MDT then return {} end
-  local dungeonIdx = getDungeonIdx(preset)
-  if not dungeonIdx then return {} end
-  local enemies = MDT.dungeonEnemies and MDT.dungeonEnemies[dungeonIdx]
-  if type(enemies) ~= "table" then return {} end
-  local lower = noteText:lower()
-  local found, seen = {}, {}
-  for _, enemy in pairs(enemies) do
-    if type(enemy) == "table"
-        and enemy.isBoss and enemy.encounterID
-        and type(enemy.name) == "string" and enemy.name ~= ""
-        and lower:find(enemy.name:lower(), 1, true)
-        and not seen[enemy.encounterID] then
-      seen[enemy.encounterID] = true
-      table.insert(found, enemy.encounterID)
-    end
-  end
-  return found
-end
-
 --- Locate the lust target. Strategy:
 ---   1) Tactyks-style: a global note in `objects` lists pulls/bosses
 ---      ("Lust on pull 1, Araknath, and High Sage")
@@ -870,14 +818,23 @@ end
 local function findCuratedFallback(challengeMapID)
   if not ZugZugKeysDB.lustReminderCuratedFallback then return nil end
   local data = _G.ZugZugKeysLustData
-  if type(data) ~= "table" then return nil end
-  local entry = data[challengeMapID]
-  if not entry or type(entry.encounterIDs) ~= "table" then return nil end
+  local entry = (type(data) == "table") and challengeMapID and data[challengeMapID] or nil
+  if entry and type(entry.encounterIDs) == "table" then
+    return {
+      source       = "curated",
+      encounterIDs = entry.encounterIDs,
+      name         = entry.name,
+      note         = entry.note,
+    }
+  end
+  -- Generic default when no per-dungeon call is curated: lust on the FIRST
+  -- boss of the key. Needs no hardcoded game IDs — the run's first
+  -- ENCOUNTER_START *is* the first boss.
   return {
-    source       = "curated",
-    encounterIDs = entry.encounterIDs,
-    name         = entry.name,
-    note         = entry.note,
+    source    = "curated",
+    firstBoss = true,
+    name      = "first boss",
+    note      = "no curated call for this dungeon — defaulting to lust on the first boss",
   }
 end
 
@@ -891,12 +848,18 @@ end
 --   { kind = "boss", encounterID = ID, fired = false }
 local state = {
   active             = false,
+  canLust            = false,  -- lust-capable class or carrying drums
   mapID              = nil,
   routeNote          = nil,
   source             = nil,    -- "mdt" | "curated"
   noteSource         = nil,    -- "object" | "pull" | nil
   targets            = {},     -- ordered list of fire-able targets
   firstCombatHandled = false,
+  -- Trash-segment tracking for WCL "afterBoss" targets: which boss last
+  -- died (nil = run start) and how many trash combats have started since.
+  segmentAnchorName    = nil,
+  segmentTrashCount    = 0,
+  lastEncounterStartAt = 0,
   -- Diagnostics: counters and last-seen values that let `/zzk lust` mid-key
   -- diagnose why forces-based targets aren't firing.
   scenarioUpdateCount = 0,
@@ -914,10 +877,18 @@ local function debug(msg)
   end
 end
 
+-- Chat feedback only a luster needs (plan summaries, "import a route"
+-- nudges). Non-lust classes still get the silent forces-bar tick marks
+-- so they can line their own cooldowns up with the group's lust — they
+-- just don't get the popup / sound / chat spam.
+local function lusterPrint(msg)
+  if state.canLust then print(msg) end
+end
+
 -- Classes that natively bring a Bloodlust / Heroism / Time Warp / Primal
 -- Rage / Fury of the Aspects effect. Members of these classes are the
 -- ones we want to remind. Other classes get silently no-opped because
--- the reminder isn't actionable for them.
+-- the reminder isn't actionable for them — unless they carry drums.
 local LUST_CAPABLE_CLASSES = {
   SHAMAN = true,    -- Bloodlust / Heroism
   MAGE   = true,    -- Time Warp
@@ -925,15 +896,55 @@ local LUST_CAPABLE_CLASSES = {
   EVOKER = true,    -- Fury of the Aspects
 }
 
+-- Crafted drums make the reminder actionable for everyone else. Item IDs
+-- from recent expansions; ADD THE CURRENT TIER'S DRUMS HERE when a new
+-- one ships (one line — the ownership check below picks it up).
+local DRUM_ITEM_IDS = {
+  219931, -- Thunderous Drums (The War Within)
+  193470, -- Feral Hide Drums (Dragonflight)
+}
+
+local GetItemCountFn = (C_Item and C_Item.GetItemCount) or GetItemCount
+
+local function playerHasDrums()
+  if not GetItemCountFn then return false end
+  for _, itemID in ipairs(DRUM_ITEM_IDS) do
+    local ok, count = pcall(GetItemCountFn, itemID)
+    if ok and type(count) == "number" and count > 0 then return true end
+  end
+  return false
+end
+
 local function canPlayerLust()
   local _, classToken = UnitClass("player")
-  return classToken ~= nil and LUST_CAPABLE_CLASSES[classToken] == true
+  if classToken and LUST_CAPABLE_CLASSES[classToken] then return true end
+  return playerHasDrums()
+end
+
+--- Push the %-based targets to the forces-bar tick overlay (ForcesBar.lua).
+--- Sends nil when the key is inactive so the marks clear. WCL boss/pack
+--- targets carry no forces % and therefore never produce a tick.
+local function pushBarMarks()
+  if type(Keys.UpdateForcesBarMarks) ~= "function" then return end
+  if not state.active then
+    Keys.UpdateForcesBarMarks(nil)
+    return
+  end
+  local list = {}
+  for _, t in ipairs(state.targets) do
+    if t.kind == "pull" and not t.fireOnFirstCombat
+        and type(t.targetPct) == "number" then
+      table.insert(list, { pct = t.targetPct, fired = t.fired and true or false })
+    end
+  end
+  Keys.UpdateForcesBarMarks(list)
 end
 
 --- Full reset — wipes targets and diagnostics. Only called when a brand new
 --- key starts via CHALLENGE_MODE_START so we don't carry stale data forward.
 local function resetState()
   state.active = false
+  state.canLust = false
   state.mapID = nil
   state.routeNote = nil
   state.presetName = nil
@@ -941,6 +952,9 @@ local function resetState()
   state.noteSource = nil
   state.targets = {}
   state.firstCombatHandled = false
+  state.segmentAnchorName = nil
+  state.segmentTrashCount = 0
+  state.lastEncounterStartAt = 0
   state.scenarioUpdateCount = 0
   state.forcesCheckCount = 0
   state.lastForcesPct = nil
@@ -952,6 +966,7 @@ local function resetState()
   state.lastStepPct = nil
   state.lastForcesSource = nil
   if backupTicker then backupTicker:Cancel(); backupTicker = nil end
+  pushBarMarks()
 end
 
 --- Soft deactivate — stops the ticker and marks the key inactive but
@@ -960,6 +975,7 @@ end
 local function deactivate()
   state.active = false
   if backupTicker then backupTicker:Cancel(); backupTicker = nil end
+  pushBarMarks()
 end
 
 ----------------------------------------------------------------------
@@ -1021,7 +1037,70 @@ local function showPopup(title, sub)
   p.title:SetText(title or "LUST NOW")
   p.sub:SetText(sub or "")
   p:Show()
-  C_Timer.After(8, function() if p then p:Hide() end end)
+  -- Cancel the previous auto-hide before re-arming, or alert 1's timer
+  -- cuts alert 2's display short when they fire within 8s of each other.
+  if p.hideTimer then p.hideTimer:Cancel() end
+  p.hideTimer = C_Timer.NewTimer(8, function()
+    p.hideTimer = nil
+    p:Hide()
+  end)
+end
+
+----------------------------------------------------------------------
+-- Lead-up progress line: "LUST @ 43% — now 38.2%" while the next
+-- forces-based target approaches, so lusters pre-position instead of
+-- reacting to an 8-second popup.
+----------------------------------------------------------------------
+
+local APPROACH_WINDOW_PCT = 15
+
+local progressLine
+local function ensureProgressLine()
+  if progressLine then return progressLine end
+  progressLine = CreateFrame("Frame", "ZugZugKeysLustProgress", UIParent, "BackdropTemplate")
+  progressLine:SetSize(250, 24)
+  progressLine:SetFrameStrata("MEDIUM")
+  progressLine:SetClampedToScreen(true)
+  progressLine:SetPoint("TOP", UIParent, "TOP", 0, -78)
+  if progressLine.SetBackdrop then
+    progressLine:SetBackdrop({
+      bgFile   = "Interface\\Buttons\\WHITE8x8",
+      edgeFile = "Interface\\Buttons\\WHITE8x8",
+      edgeSize = 1,
+    })
+    progressLine:SetBackdropColor(0.06, 0.07, 0.05, 0.88)
+    progressLine:SetBackdropBorderColor(0.56, 0.75, 0.25, 0.5)
+  end
+  progressLine.text = progressLine:CreateFontString(nil, "OVERLAY")
+  progressLine.text:SetFont(STANDARD_TEXT_FONT, 12, "OUTLINE")
+  progressLine.text:SetPoint("CENTER")
+  progressLine:Hide()
+  return progressLine
+end
+
+local function hideProgressLine()
+  if progressLine then progressLine:Hide() end
+end
+
+local function updateProgressLine(pct)
+  -- Floating lead-up line is an active alert — lusters only. (The static
+  -- tick marks on the forces bar are what non-lust classes get instead.)
+  if not state.canLust then hideProgressLine(); return end
+  local nextTarget
+  for _, t in ipairs(state.targets) do
+    if not t.fired and t.kind == "pull" and not t.fireOnFirstCombat and t.targetPct then
+      if not nextTarget or t.targetPct < nextTarget.targetPct then nextTarget = t end
+    end
+  end
+  if not nextTarget or pct < (nextTarget.targetPct - APPROACH_WINDOW_PCT) then
+    hideProgressLine()
+    return
+  end
+  local p = ensureProgressLine()
+  p.text:SetText(string.format(
+    "|cff8fbf3fLUST @ %.0f%%|r  |cffffd078now %.1f%%|r",
+    nextTarget.targetPct, pct))
+  p:Show()
 end
 
 ----------------------------------------------------------------------
@@ -1039,6 +1118,11 @@ end
 local function fireAlert(target, reason)
   if not target or target.fired then return end
   target.fired = true
+  hideProgressLine()
+  pushBarMarks() -- dim this target's tick on the forces bar
+  -- Non-lust classes see the tick dim but get no popup / sound / chat —
+  -- the "LUST NOW" prompt is only actionable for someone who can lust.
+  if not state.canLust then return end
 
   local count = #state.targets
   local idx   = targetIndex(target) or 1
@@ -1052,17 +1136,12 @@ local function fireAlert(target, reason)
 
   local detail
   if target.kind == "pull" then
-    if target.name then
-      detail = string.format("%s — pull %d at %.0f%% forces",
-        target.name, target.pullIndex or 0, target.targetPct or 0)
-    else
-      detail = string.format("pull %d at %.0f%% forces",
-        target.pullIndex or 0, target.targetPct or 0)
-    end
-  elseif target.kind == "boss" then
-    detail = (target.name and (target.name .. " engaged")) or
-             ("boss engaged (encounterID " .. tostring(target.encounterID) .. ")")
+    local pullRef = string.format("pull %d", target.pullIndex or 0)
+    detail = target.name and (target.name .. " (" .. pullRef .. ")") or pullRef
   end
+  -- boss/afterBoss targets: the reason string already carries the full
+  -- story ("Crawth engaged" / "pack 2 after Vexamus") — no detail prefix,
+  -- or the popup reads doubled ("Crawth engaged — boss engaged (Crawth)").
   if reason and reason ~= "" then
     detail = (detail and (detail .. " — ") or "") .. reason
   end
@@ -1257,13 +1336,86 @@ end
 -- Key lifecycle
 ----------------------------------------------------------------------
 
+----------------------------------------------------------------------
+-- WCL-derived call source (ZugZugKeysWclLustData, generated weekly by
+-- scripts/update-lustdata.ts from top WarcraftLogs runs)
+----------------------------------------------------------------------
+
+--- Normalize dungeon names so WCL data names ("Seat of Triumvirate")
+--- match in-game names ("Seat of the Triumvirate").
+local function normalizeDungeon(s)
+  if type(s) ~= "string" then return "" end
+  s = s:lower():gsub("[^%w%s]", " "):gsub("%s+", " ")
+  s = " " .. s .. " "
+  s = s:gsub(" the ", " ")
+  return (s:gsub("%s+", ""))
+end
+
+local function findWclCalls(dungeonName)
+  local data = _G.ZugZugKeysWclLustData
+  if type(data) ~= "table" or not dungeonName then return nil end
+  if data[dungeonName] then return data[dungeonName] end
+  local want = normalizeDungeon(dungeonName)
+  for name, entry in pairs(data) do
+    if normalizeDungeon(name) == want then return entry end
+  end
+end
+
+local function describeWclCall(c)
+  if c.type == "boss" then
+    return "on " .. tostring(c.bossName or "boss")
+  end
+  local offset = c.pullOffset or 1
+  if c.anchorBossName then
+    return string.format("pack %d after %s", offset, tostring(c.anchorBossName))
+  end
+  return offset == 1 and "opening pull" or string.format("pack %d from start", offset)
+end
+
+--- Build state.targets from the WCL consensus for this dungeon.
+--- Returns true when at least one target was loaded.
+local function tryWclTargets(dungeonName)
+  local entry = findWclCalls(dungeonName)
+  if not entry or type(entry.calls) ~= "table" or #entry.calls == 0 then return false end
+
+  local summary = {}
+  for _, c in ipairs(entry.calls) do
+    if c.type == "boss" and c.bossName then
+      table.insert(state.targets, {
+        kind = "boss", name = c.bossName, fired = false,
+        support = c.support, runsAnalyzed = c.runsAnalyzed,
+      })
+      table.insert(summary, describeWclCall(c))
+    elseif c.type == "afterBoss" then
+      table.insert(state.targets, {
+        kind = "afterBoss",
+        anchorBossName = c.anchorBossName, -- nil = run start
+        pullOffset = c.pullOffset or 1,
+        fired = false,
+        support = c.support, runsAnalyzed = c.runsAnalyzed,
+      })
+      table.insert(summary, describeWclCall(c))
+    end
+  end
+  if #state.targets == 0 then return false end
+
+  state.source    = "wcl"
+  state.routeNote = string.format("WCL top-log consensus (%s runs, keys %s)",
+    tostring(entry.runsAnalyzed or "?"), tostring(entry.keystoneLevels or "?"))
+  lusterPrint("|cffff8800ZugZug Keys:|r WCL top-log lust plan: "
+    .. table.concat(summary, " → "))
+  return true
+end
+
 local function loadTargetForCurrentKey()
   if not ZugZugKeysDB.lustReminder then return end
-  if not canPlayerLust() then
-    -- Stay silent for non-lust classes — the reminder isn't useful for
-    -- them. The /zzk lust status command surfaces this state if needed.
-    debug("player's class isn't a lust-capable class; reminder suppressed")
-    return
+  -- Non-lust classes (no lust spell, no drums) still load targets so the
+  -- passive forces-bar tick marks render — they just don't get the active
+  -- alerts (popup / sound / chat summaries / lead-up line / announce),
+  -- all of which are gated on state.canLust downstream.
+  state.canLust = canPlayerLust()
+  if not state.canLust then
+    debug("non-lust class — loading targets for bar marks only, alerts suppressed")
   end
 
   local mapID
@@ -1271,18 +1423,30 @@ local function loadTargetForCurrentKey()
   if ok then mapID = Keys.safeNum and Keys.safeNum(id) or (type(id) == "number" and id or nil) end
   state.mapID = mapID
   state.active = true
-  state.fired = false
 
-  -- Diagnostic: confirm CHALLENGE_MODE_START reached here. Helps the
-  -- user tell "event didn't fire" from "route has no parseable note".
-  do
+  -- Diagnostic: confirm CHALLENGE_MODE_START reached here. Helps tell
+  -- "event didn't fire" from "route has no parseable note".
+  if ZugZugKeysDB.lustReminderDebug then
     local preview = getCurrentPreset()
     local pname   = (preview and preview.text) or "(no preset resolved)"
     print(string.format("|cffff8800ZugZug Keys:|r key started — using MDT route '%s'.",
       tostring(pname)))
   end
 
-  -- Try MDT route first.
+  -- Resolve the dungeon's display name once — the WCL source keys off it.
+  local dungeonName
+  if mapID then
+    local okN, n = pcall(C_ChallengeMode.GetMapUIInfo, mapID)
+    if okN and type(n) == "string" then dungeonName = n end
+  end
+  dungeonName = dungeonName or GetInstanceInfo()
+
+  -- Source priority: the lustReminderSource setting decides whether WCL
+  -- top-log consensus or the player's MDT route wins when both exist.
+  local source = ZugZugKeysDB.lustReminderSource or "wcl"
+  if source == "wcl" and tryWclTargets(dungeonName) then return end
+
+  -- Try MDT route.
   local mdt = findLustTargetFromMDT()
   if mdt then
     local preset = getCurrentPreset()
@@ -1297,13 +1461,13 @@ local function loadTargetForCurrentKey()
       local activeDungeonIdx = mdtDungeonIdxForMapID(activeMapID)
       local activeName = (_G.MDT and MDT.dungeonList and MDT.dungeonList[activeDungeonIdx])
                         or ("dungeonIdx " .. tostring(activeDungeonIdx))
-      print(string.format(
+      lusterPrint(string.format(
         "|cffff4444ZugZug Keys:|r no MDT route loaded for %s. Open MDT, switch to that dungeon's tab and import a route (e.g. Tactyks), then /reload.",
         tostring(activeName)))
-      state.active = false
-      return
+      mdt = nil -- fall through to the WCL / curated fallbacks instead of going dark
     end
 
+    if mdt then
     state.source     = "mdt"
     state.noteSource = mdt.noteSource
     state.routeNote  = mdt.note
@@ -1340,41 +1504,54 @@ local function loadTargetForCurrentKey()
           (t.name and (t.name .. " ") or "") ..
           string.format("pull %d (%.0f%%)", t.pullIndex, t.targetPct or 0))
       else
-        table.insert(summary,
-          (t.name or "boss") .. " (encID " .. tostring(t.encounterID) .. ")")
+        table.insert(summary, "on " .. tostring(t.name or "boss"))
       end
     end
     local preFix = state.presetName
       and string.format(" using route '%s'", state.presetName) or ""
     if count > 0 then
-      print(string.format(
+      lusterPrint(string.format(
         "|cffff8800ZugZug Keys:|r %d lust target%s loaded%s — %s.",
         count, count == 1 and "" or "s", preFix, table.concat(summary, ", ")))
     else
-      print("|cffff8800ZugZug Keys:|r found lust note but couldn't extract any pull/boss reference"
+      lusterPrint("|cffff8800ZugZug Keys:|r found lust note but couldn't extract any pull/boss reference"
         .. preFix .. ". Note: " .. tostring(mdt.note))
     end
     return
+    end
   end
 
-  -- Fallback to curated.
-  local curated = mapID and findCuratedFallback(mapID)
+  -- MDT had nothing usable — if WCL wasn't tried yet, try it now.
+  if source ~= "wcl" and tryWclTargets(dungeonName) then return end
+
+  -- Fallback to curated (or the generic first-boss default).
+  local curated = findCuratedFallback(mapID)
   if curated then
     state.source    = "curated"
     state.routeNote = curated.note or curated.name
-    for _, encID in ipairs(curated.encounterIDs) do
+    if curated.firstBoss then
       table.insert(state.targets, {
-        kind        = "boss",
-        encounterID = encID,
-        fired       = false,
+        kind      = "boss",
+        firstBoss = true,
+        name      = curated.name,
+        fired     = false,
       })
+      lusterPrint("|cffff8800ZugZug Keys:|r no MDT route — defaulting to |cffffd078LUST ON FIRST BOSS|r. Import a route (e.g. Tactyks) for pull-accurate calls.")
+    else
+      for _, encID in ipairs(curated.encounterIDs) do
+        table.insert(state.targets, {
+          kind        = "boss",
+          encounterID = encID,
+          fired       = false,
+        })
+      end
+      lusterPrint(string.format(
+        "|cffff8800ZugZug Keys:|r curated lust target%s loaded — alerts on %d boss engage%s.",
+        #state.targets == 1 and "" or "s",
+        #state.targets,
+        #state.targets == 1 and "" or "s"))
     end
     debug("Curated lust fallback in use for mapID " .. tostring(mapID))
-    print(string.format(
-      "|cffff8800ZugZug Keys:|r curated lust target%s loaded — alerts on %d boss engage%s.",
-      #state.targets == 1 and "" or "s",
-      #state.targets,
-      #state.targets == 1 and "" or "s"))
     return
   end
 
@@ -1390,6 +1567,18 @@ end
 
 local function tickForcesCheck(triggerSource)
   if not state.active then return end
+  -- Perf: the scenario snapshot allocates a pile of short-lived tables on
+  -- every SCENARIO_CRITERIA_UPDATE (per mob death) plus the 1s ticker.
+  -- Skip it entirely when no unfired forces-based pull target remains
+  -- (boss-only routes, or everything already fired).
+  local pending = false
+  for _, t in ipairs(state.targets) do
+    if not t.fired and t.kind == "pull" and not t.fireOnFirstCombat and t.targetPct then
+      pending = true
+      break
+    end
+  end
+  if not pending then return end
   state.forcesCheckCount = (state.forcesCheckCount or 0) + 1
   local pct
   local ok, err = pcall(function() pct = getEnemyForcesPct() end)
@@ -1412,6 +1601,7 @@ local function tickForcesCheck(triggerSource)
   state.lastForcesPct = pct
   state.lastForcesAt  = GetTime()
   state.lastForcesErr = nil
+  updateProgressLine(pct)
   local lead = ZugZugKeysDB.lustReminderLeadPct or 3
   for _, t in ipairs(state.targets) do
     if not t.fired
@@ -1455,11 +1645,37 @@ local function onEncounterStart(encounterID, encounterName)
   if not state.active then return end
   for _, t in ipairs(state.targets) do
     if not t.fired and t.kind == "boss" then
-      local matched = bossNamesMatch(t.name, encounterName)
+      local matched = t.firstBoss
+        or bossNamesMatch(t.name, encounterName)
         or (t.encounterID and t.encounterID == encounterID)
       if matched then
-        fireAlert(t, "boss engaged" ..
-          (encounterName and (" (" .. encounterName .. ")") or ""))
+        local who = (type(encounterName) == "string" and encounterName)
+          or t.name or "boss"
+        fireAlert(t, who .. " engaged")
+        return
+      end
+    end
+  end
+end
+
+--- Fire any WCL afterBoss target whose segment anchor + pack count match
+--- the trash combat that just started.
+local function evaluateAfterBossTargets()
+  for _, t in ipairs(state.targets) do
+    if not t.fired and t.kind == "afterBoss" then
+      local anchorMatch
+      if t.anchorBossName == nil then
+        anchorMatch = (state.segmentAnchorName == nil)
+      else
+        anchorMatch = state.segmentAnchorName ~= nil
+          and bossNamesMatch(t.anchorBossName, state.segmentAnchorName)
+      end
+      if anchorMatch and state.segmentTrashCount == (t.pullOffset or 1) then
+        fireAlert(t, describeWclCall({
+          type = "afterBoss",
+          anchorBossName = t.anchorBossName,
+          pullOffset = t.pullOffset,
+        }))
         return
       end
     end
@@ -1467,15 +1683,31 @@ local function onEncounterStart(encounterID, encounterName)
 end
 
 local function onRegenDisabled()
-  if not state.active or state.firstCombatHandled then return end
-  state.firstCombatHandled = true
-  for _, t in ipairs(state.targets) do
-    if not t.fired and t.kind == "pull" and t.fireOnFirstCombat then
-      fireAlert(t, "first pull engaged")
-      return
+  if not state.active then return end
+
+  if not state.firstCombatHandled then
+    state.firstCombatHandled = true
+    for _, t in ipairs(state.targets) do
+      if not t.fired and t.kind == "pull" and t.fireOnFirstCombat then
+        fireAlert(t, "first pull engaged")
+        break
+      end
     end
   end
+
+  -- Trash-segment counting for WCL afterBoss targets. Deferred: a boss
+  -- pull fires ENCOUNTER_START right after PLAYER_REGEN_DISABLED, and boss
+  -- combats must not count as trash packs (or false-fire pack alerts).
+  local combatStartedAt = GetTime()
+  C_Timer.After(1.5, function()
+    if not state.active then return end
+    if state.lastEncounterStartAt >= combatStartedAt then return end -- boss pull
+    state.segmentTrashCount = state.segmentTrashCount + 1
+    evaluateAfterBossTargets()
+  end)
 end
+
+local announceLustPlan -- defined below; forward declaration for the handler
 
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("CHALLENGE_MODE_START")
@@ -1483,8 +1715,10 @@ frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 frame:RegisterEvent("CHALLENGE_MODE_RESET")
 frame:RegisterEvent("SCENARIO_CRITERIA_UPDATE")
 frame:RegisterEvent("ENCOUNTER_START")
+frame:RegisterEvent("ENCOUNTER_END")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("PLAYER_REGEN_DISABLED")
+frame:RegisterEvent("READY_CHECK")
 frame:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
   if event == "CHALLENGE_MODE_START" then
     resetState()
@@ -1492,6 +1726,7 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
     -- and update its current sublevel if it auto-selects per-dungeon.
     C_Timer.After(0.5, function()
       loadTargetForCurrentKey()
+      pushBarMarks()
       -- Safety net: SCENARIO_CRITERIA_UPDATE is the right event for forces
       -- updates, but in some 12.0 scenarios it can be sparse. A 1-second
       -- backup poll guarantees we still see %-changes within ~1s.
@@ -1507,6 +1742,7 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
     -- Preserve targets + diagnostics so a post-key `/zzk lust` still shows
     -- what fired (and what didn't). Cleared on the next CHALLENGE_MODE_START.
     deactivate()
+    hideProgressLine()
     return
   end
   if event == "PLAYER_ENTERING_WORLD" then
@@ -1514,6 +1750,7 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
     if not (inInst and instType == "party") then
       -- Same as above — just deactivate, keep diagnostics for inspection.
       deactivate()
+      hideProgressLine()
     end
     return
   end
@@ -1522,7 +1759,20 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
     tickForcesCheck("SCENARIO_CRITERIA_UPDATE")
     return
   end
+  if event == "ENCOUNTER_END" then
+    -- args: encounterID, encounterName, difficultyID, groupSize, success.
+    -- A successful kill advances the trash segment for afterBoss targets;
+    -- wipes keep the anchor (the next combat is the same boss again).
+    local encounterName = arg2
+    local success = select(3, ...)
+    if state.active and success == 1 and type(encounterName) == "string" then
+      state.segmentAnchorName = encounterName
+      state.segmentTrashCount = 0
+    end
+    return
+  end
   if event == "ENCOUNTER_START" then
+    state.lastEncounterStartAt = GetTime()
     -- ENCOUNTER_START fires with (encounterID, encounterName, difficultyID, groupSize).
     -- Pass both because MDT stores the journal instance ID in its
     -- per-boss encounterID field for every boss in a dungeon (e.g. 2658
@@ -1535,7 +1785,142 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
     onRegenDisabled()
     return
   end
+  if event == "READY_CHECK" then
+    pcall(announceLustPlan)
+    return
+  end
 end)
+
+----------------------------------------------------------------------
+-- Ready-check announcement: tell the group where lust is planned,
+-- BEFORE the key starts (so the plan is known while food/flask happen).
+----------------------------------------------------------------------
+
+-- Groups usually fire several ready checks in a row before a pull (someone
+-- declines, re-checks, a straggler zones in). Suppress repeat announces for
+-- a few minutes so the plan posts once per staging cluster, not per check.
+local ANNOUNCE_THROTTLE = 180  -- seconds
+local lastAnnounceAt = 0
+
+announceLustPlan = function()
+  if not (ZugZugKeysDB.lustReminder and ZugZugKeysDB.lustReminderAnnounce) then return end
+  if not canPlayerLust() then return end
+  if not IsInGroup() then return end
+  local inInst, instType = IsInInstance()
+  if not (inInst and instType == "party") then return end
+  local now = GetTime()
+  if now - lastAnnounceAt < ANNOUNCE_THROTTLE then return end
+
+  local dungeonName = GetInstanceInfo()
+  local source = ZugZugKeysDB.lustReminderSource or "wcl"
+
+  local function wclSummary()
+    local entry = findWclCalls(dungeonName)
+    if not entry or type(entry.calls) ~= "table" or #entry.calls == 0 then return nil end
+    local parts = {}
+    for _, c in ipairs(entry.calls) do
+      table.insert(parts, describeWclCall(c))
+    end
+    return table.concat(parts, " → ")
+  end
+
+  local function mdtSummary()
+    local mdt = findLustTargetFromMDT()
+    if not mdt or type(mdt.hits) ~= "table" or #mdt.hits == 0 then return nil end
+    local parts = {}
+    for _, h in ipairs(mdt.hits) do
+      if h.kind == "pull" then
+        table.insert(parts, h.name and tostring(h.name) or ("pull " .. tostring(h.pullIndex)))
+      elseif h.kind == "boss" then
+        table.insert(parts, "on " .. tostring(h.name or "boss"))
+      end
+    end
+    if #parts == 0 then return nil end
+    return table.concat(parts, " → ")
+  end
+
+  local summary
+  if source == "wcl" then
+    summary = wclSummary() or mdtSummary()
+  else
+    summary = mdtSummary() or wclSummary()
+  end
+  if not summary then return end
+
+  lastAnnounceAt = now
+  local channel = IsInGroup(LE_PARTY_CATEGORY_INSTANCE) and "INSTANCE_CHAT" or "PARTY"
+  local msg = "[ZugZug] Lust plan: " .. summary
+  if #msg > 250 then msg = msg:sub(1, 247) .. "..." end
+  pcall(SendChatMessage, msg, channel)
+end
+
+-- Mid-key /reload or DC recovery: Core detects the still-active challenge
+-- on PLAYER_ENTERING_WORLD and fires keyRecovered — rebuild targets and
+-- restart the watchdog exactly as CHALLENGE_MODE_START would have.
+-- Without this, a reload mid-key silently killed the reminder for the
+-- rest of the run.
+Keys.on("keyRecovered", function()
+  resetState()
+  C_Timer.After(0.5, function()
+    loadTargetForCurrentKey()
+    pushBarMarks()
+    if state.active and not backupTicker then
+      backupTicker = C_Timer.NewTicker(1.0, function()
+        tickForcesCheck("ticker")
+      end)
+    end
+  end)
+end)
+
+----------------------------------------------------------------------
+-- /zzk lust — live status dump (the diagnostics were always collected;
+-- this finally exposes them).
+----------------------------------------------------------------------
+
+function Keys.LustReminderStatus()
+  local on = ZugZugKeysDB.lustReminder
+  print("|cff8fbf3fZugZug Keys|r — Lust Reminder status")
+  print("  enabled: " .. tostring(on) .. "   active: " .. tostring(state.active)
+    .. "   source: " .. tostring(state.source or "-")
+    .. "   canLust: " .. tostring(state.canLust)
+    .. (state.canLust and "" or " (alerts off — bar marks only)"))
+  if state.routeNote then
+    print("  route note: " .. tostring(state.routeNote))
+  end
+  if state.lastForcesPct then
+    print(string.format("  last forces: %.1f%% (%.0fs ago)",
+      state.lastForcesPct, GetTime() - (state.lastForcesAt or GetTime())))
+  end
+  if state.lastForcesErr then
+    print("  last forces error: " .. tostring(state.lastForcesErr))
+  end
+  if type(Keys.ForcesBarMarksInfo) == "function" then
+    print("  " .. Keys.ForcesBarMarksInfo())
+  end
+  if #state.targets == 0 then
+    print("  targets: none loaded")
+  end
+  for i, t in ipairs(state.targets) do
+    local desc
+    if t.kind == "pull" then
+      desc = string.format("pull %s @ %.0f%%%s",
+        tostring(t.pullIndex or "?"), t.targetPct or 0,
+        t.fireOnFirstCombat and " (first combat)" or "")
+    elseif t.kind == "afterBoss" then
+      desc = describeWclCall({
+        type = "afterBoss", anchorBossName = t.anchorBossName, pullOffset = t.pullOffset,
+      })
+      if t.support then
+        desc = desc .. string.format(" [%d/%d logs]", t.support, t.runsAnalyzed or t.support)
+      end
+    else
+      desc = t.firstBoss and "first boss of the run"
+        or string.format("boss %s", tostring(t.name or t.encounterID or "?"))
+    end
+    print(string.format("  target %d: %s — %s", i, desc,
+      t.fired and "|cff7ea832fired|r" or "|cffffd078pending|r"))
+  end
+end
 
 ----------------------------------------------------------------------
 -- Simulation command: /zzk lustsim [dungeonIdx]

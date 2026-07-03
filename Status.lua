@@ -95,12 +95,14 @@ local function setBnMessage(text)
 end
 
 --- Best-effort read of the current custom message so we can restore it.
---- BNGetInfo's return shape has drifted across patches — pick the longest
---- non-tag string in the returns as a heuristic for the broadcast text.
+--- The documented shape is `presenceID, battleTag, toonID, broadcastText,
+--- ...` — prefer the 4th return; fall back to the longest-non-tag-string
+--- heuristic since the shape has drifted across patches.
 local function readBnMessage()
   if not BNGetInfo then return nil end
   local ok, returns = pcall(function() return { BNGetInfo() } end)
   if not ok or type(returns) ~= "table" then return nil end
+  if type(returns[4]) == "string" then return returns[4] end
   local best
   for i = 1, #returns do
     local v = returns[i]
@@ -200,6 +202,33 @@ end
 Keys.on("keyStart",    onKeyStart)
 Keys.on("keyComplete", onKeyComplete)
 Keys.on("keyReset",    onKeyReset)
+
+----------------------------------------------------------------------
+-- Login cleanup: the 60s restore timer doesn't survive /reload or a
+-- logout right after a key completes, which strands "+14 ... Done in
+-- 31:42" on the user's BNet status until their NEXT key. If a captured
+-- pre-key message is still in the DB at login and no key is being
+-- recovered, finish the restore now.
+----------------------------------------------------------------------
+
+local loginFrame = CreateFrame("Frame")
+loginFrame:RegisterEvent("PLAYER_LOGIN")
+loginFrame:SetScript("OnEvent", function(self)
+  self:UnregisterEvent("PLAYER_LOGIN")
+  -- Delay: BNet info isn't reliably writable right at login, and Core's
+  -- PLAYER_ENTERING_WORLD recovery (which re-arms inActiveKey after a
+  -- mid-key reload) needs to run first.
+  C_Timer.After(5, function()
+    if Keys.state.inActiveKey then return end            -- mid-key reload
+    if ZugZugKeysDB._keyStartEpoch then return end       -- key pending recovery
+    if ZugZugKeysDB._startBroadcastSent then return end  -- keyReset path cleans up
+    local restore = ZugZugKeysDB._prevBnMessage
+    if restore == nil then return end
+    if looksLikeZugZugBroadcast(restore) then restore = nil end
+    setBnMessage(restore or "")
+    ZugZugKeysDB._prevBnMessage = nil
+  end)
+end)
 
 ----------------------------------------------------------------------
 -- Exposed for /zzk commands

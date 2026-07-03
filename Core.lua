@@ -29,6 +29,9 @@ local DEFAULTS = {
   lustReminderSound = true,         -- play a sound on alert
   lustReminderCuratedFallback = true, -- use curated boss-N fallback when MDT route has no marker
   lustReminderDebug = false,        -- chat-print diagnostic info
+  lustReminderSource = "wcl",       -- which call source wins when both exist: "wcl" | "mdt"
+  lustReminderAnnounce = true,      -- announce the lust plan to the group on ready check
+  lustReminderBarMarks = true,      -- tick marks on the tracker's forces bar at planned lust %s
 }
 Keys.DEFAULTS = DEFAULTS
 
@@ -42,13 +45,11 @@ end
 -- Helpers (shared)
 ----------------------------------------------------------------------
 
+--- Return v only if it's a plain, non-secret number (12.0 Secret Values
+--- can pass type() checks in some contexts but explode on use).
 function Keys.safeNum(v)
+  if issecretvalue and issecretvalue(v) then return nil end
   return (type(v) == "number") and v or nil
-end
-
-function Keys.formatTime(sec)
-  sec = math.max(0, math.floor((sec or 0) + 0.5))
-  return string.format("%d:%02d", math.floor(sec / 60), sec % 60)
 end
 
 ----------------------------------------------------------------------
@@ -56,13 +57,11 @@ end
 ----------------------------------------------------------------------
 
 Keys.state = {
-  inActiveKey       = false,
-  keyStartTime      = nil,     -- GetTime() at CHALLENGE_MODE_START
-  keyName           = nil,     -- dungeon name (plain string)
-  keyLevel          = nil,     -- keystone level (plain number)
-  keyTimeLimit      = nil,     -- seconds (plain number)
-  instanceEnterTime = nil,
-  bossesKilled      = 0,
+  inActiveKey  = false,
+  keyStartTime = nil,     -- GetTime() at CHALLENGE_MODE_START
+  keyName      = nil,     -- dungeon name (plain string)
+  keyLevel     = nil,     -- keystone level (plain number)
+  keyTimeLimit = nil,     -- seconds (plain number)
 }
 
 ----------------------------------------------------------------------
@@ -109,7 +108,6 @@ local function captureKeyInfo()
   s.keyStartTime = GetTime()
   s.inActiveKey = true
   s.keyName, s.keyLevel, s.keyTimeLimit = nil, nil, nil
-  s.bossesKilled = 0
 
   -- Persist epoch start so elapsed time on completion survives /reload.
   -- Only set if absent so recovery preserves the real start instead of
@@ -150,8 +148,6 @@ frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("CHALLENGE_MODE_START")
 frame:RegisterEvent("CHALLENGE_MODE_RESET")
 frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
-frame:RegisterEvent("BOSS_KILL")
-frame:RegisterEvent("ENCOUNTER_END")
 frame:SetScript("OnEvent", function(_, event, arg1, ...)
   if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
     ensureDefaults()
@@ -167,15 +163,17 @@ frame:SetScript("OnEvent", function(_, event, arg1, ...)
     local inInstance, instanceType = IsInInstance()
     local s = Keys.state
     if inInstance and instanceType == "party" then
-      s.instanceEnterTime = s.instanceEnterTime or GetTime()
       -- Recover key state if we reloaded mid-key.
       -- Do NOT re-fire keyStart here — BNet's custom message persists across
       -- our own /reloads, so re-broadcasting would just send a duplicate with
       -- the wrong start time (the reload moment instead of the real start).
+      -- keyRecovered lets feature modules (LustReminder) re-arm without the
+      -- broadcast side effects of keyStart.
       if not s.inActiveKey then
         local ok, id = pcall(C_ChallengeMode.GetActiveChallengeMapID)
         if ok and Keys.safeNum(id) then
           captureKeyInfo()
+          Keys.fire("keyRecovered")
         end
       end
     else
@@ -185,7 +183,6 @@ frame:SetScript("OnEvent", function(_, event, arg1, ...)
       if s.inActiveKey or ZugZugKeysDB._keyStartEpoch then
         Keys.fire("keyReset")
       end
-      s.instanceEnterTime = nil
       s.inActiveKey = false
       s.keyStartTime = nil
       ZugZugKeysDB._startBroadcastSent = nil
@@ -200,28 +197,7 @@ frame:SetScript("OnEvent", function(_, event, arg1, ...)
     -- real start, not a stale value from a previous run.
     ZugZugKeysDB._keyStartEpoch = nil
     captureKeyInfo()
-    Keys.state.instanceEnterTime = GetTime()
     Keys.fire("keyStart")
-    return
-  end
-
-  if event == "BOSS_KILL" or event == "ENCOUNTER_END" then
-    -- arg1 = encounterID for both events.
-    -- ENCOUNTER_END's 4th vararg is the `success` flag; BOSS_KILL always succeeded.
-    local encounterID = arg1
-    local success = (event == "ENCOUNTER_END") and select(4, ...) or 1
-    if Keys.state.inActiveKey and success == 1 then
-      -- Dedupe: BOSS_KILL and ENCOUNTER_END both fire for the same M+ boss.
-      -- Skip if we already counted this encounterID in the last 5 seconds.
-      local now = GetTime()
-      Keys.state._lastKillID = Keys.state._lastKillID or {}
-      local last = Keys.state._lastKillID[encounterID]
-      if not last or (now - last) > 5 then
-        Keys.state._lastKillID[encounterID] = now
-        Keys.state.bossesKilled = Keys.state.bossesKilled + 1
-        Keys.fire("bossKill")
-      end
-    end
     return
   end
 

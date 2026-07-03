@@ -79,10 +79,35 @@ local function setOverlay(button, text)
   end
 end
 
+--- Parse "9:22 PM" into minutes-of-day, or nil.
+local function parse12h(str)
+  if type(str) ~= "string" then return nil end
+  local h, m, ap = str:match("^(%d+):(%d+)%s*([AP]M)$")
+  h, m = tonumber(h), tonumber(m)
+  if not h or not m or h < 1 or h > 12 or m > 59 then return nil end
+  if ap == "PM" and h ~= 12 then h = h + 12 end
+  if ap == "AM" and h == 12 then h = 0 end
+  return h * 60 + m
+end
+
 local function formatOverlay(parsed)
   if parsed.state == "done" then
     -- Muted level + soft green completion time so it reads as past-tense.
     return string.format("|cff888888+%d|r |cff7ea832done %s|r", parsed.level, parsed.time)
+  end
+  -- Overtime detection: the broadcast's estimate is in realm time, which
+  -- viewer and sender share — compare against GetGameTime and flip the
+  -- overlay to "late +Nm" once the estimate has passed.
+  local finishMin = parse12h(parsed.finish)
+  if finishMin then
+    local nh, nm = GetGameTime()
+    if nh and nm then
+      local diff = finishMin - (nh * 60 + nm)
+      if diff < -360 then diff = diff + 1440 end -- estimate crossed midnight
+      if diff < 0 then
+        return string.format("|cff8fbf3f+%d|r |cffE06B6Blate +%dm|r", parsed.level, -diff)
+      end
+    end
   end
   -- Bright level + warm yellow finish time for an in-progress key.
   return string.format("|cff8fbf3f+%d|r |cffffd078~%s|r", parsed.level, parsed.finish)

@@ -41,17 +41,24 @@ jobs:
         # this). The checkout is disposable, so editing in place is fine.
         # Then bundle the TOC + every .lua module; anything in .pkgmeta's
         # ignore section is excluded by listing files explicitly.
+        # Stage into a ZugZugKeys/ folder first — the zip must contain the
+        # addon FOLDER, not loose files, or "extract into Interface/AddOns/"
+        # (per the release body) produces a broken install.
         run: |
           sed -i "s/@project-version@/${{ steps.version.outputs.tag }}/" ZugZugKeys.toc
-          zip -r ZugZugKeys.zip \
-            ZugZugKeys.toc \
-            Core.lua \
-            Status.lua \
-            KeyInfo.lua \
-            FriendsList.lua \
-            LustData.lua \
-            LustReminder.lua \
-            Settings.lua
+          mkdir -p stage/ZugZugKeys
+          cp ZugZugKeys.toc \
+             Core.lua \
+             Status.lua \
+             KeyInfo.lua \
+             FriendsList.lua \
+             LustData.lua \
+             LustDataWCL.lua \
+             LustReminder.lua \
+             ForcesBar.lua \
+             Settings.lua \
+             stage/ZugZugKeys/
+          (cd stage && zip -r ../ZugZugKeys.zip ZugZugKeys)
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

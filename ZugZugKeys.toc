@@ -14,5 +14,7 @@ Status.lua
 KeyInfo.lua
 FriendsList.lua
 LustData.lua
+LustDataWCL.lua
 LustReminder.lua
+ForcesBar.lua
 Settings.lua
