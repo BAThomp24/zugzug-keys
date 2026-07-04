@@ -31,7 +31,8 @@ local DEFAULTS = {
   lustReminderDebug = false,        -- chat-print diagnostic info
   lustReminderSource = "wcl",       -- which call source wins when both exist: "wcl" | "mdt"
   lustReminderAnnounce = true,      -- announce the lust plan to the group on ready check
-  lustReminderBarMarks = true,      -- tick marks on the tracker's forces bar at planned lust %s
+  lustReminderBarMarks = true,      -- tick marks on the forces/timer bars at planned lusts
+  lustReminderWclCohort = "p01",    -- which WCL log bracket feeds calls: "top" | "p1" | "p01"
 }
 Keys.DEFAULTS = DEFAULTS
 

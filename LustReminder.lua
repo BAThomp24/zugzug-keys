@@ -921,23 +921,27 @@ local function canPlayerLust()
   return playerHasDrums()
 end
 
---- Push the %-based targets to the forces-bar tick overlay (ForcesBar.lua).
---- Sends nil when the key is inactive so the marks clear. WCL boss/pack
---- targets carry no forces % and therefore never produce a tick.
+--- Push the current targets to the bar-tick overlays (ForcesBar.lua):
+--- %-based pull targets mark the forces bar; WCL targets carrying a
+--- median cast time (atMs) mark the key timer bar. Sends nil when the
+--- key is inactive so all marks clear.
 local function pushBarMarks()
   if type(Keys.UpdateForcesBarMarks) ~= "function" then return end
   if not state.active then
-    Keys.UpdateForcesBarMarks(nil)
+    Keys.UpdateForcesBarMarks(nil, nil)
     return
   end
-  local list = {}
+  local pcts, times = {}, {}
   for _, t in ipairs(state.targets) do
     if t.kind == "pull" and not t.fireOnFirstCombat
         and type(t.targetPct) == "number" then
-      table.insert(list, { pct = t.targetPct, fired = t.fired and true or false })
+      table.insert(pcts, { pct = t.targetPct, fired = t.fired and true or false })
+    end
+    if type(t.atMs) == "number" and t.atMs > 0 then
+      table.insert(times, { atMs = t.atMs, fired = t.fired and true or false })
     end
   end
-  Keys.UpdateForcesBarMarks(list)
+  Keys.UpdateForcesBarMarks(pcts, times)
 end
 
 --- Full reset — wipes targets and diagnostics. Only called when a brand new
@@ -1351,14 +1355,29 @@ local function normalizeDungeon(s)
   return (s:gsub("%s+", ""))
 end
 
+--- Resolve the WCL data entry for a dungeon, honoring the configured log
+--- cohort. The top-level entry is the "top" cohort (also the fallback when
+--- the data predates cohorts or the requested one came back empty):
+---   entry.cohorts = { p1 = {...}, p01 = {...} }  -- same shape as entry
 local function findWclCalls(dungeonName)
   local data = _G.ZugZugKeysWclLustData
   if type(data) ~= "table" or not dungeonName then return nil end
-  if data[dungeonName] then return data[dungeonName] end
-  local want = normalizeDungeon(dungeonName)
-  for name, entry in pairs(data) do
-    if normalizeDungeon(name) == want then return entry end
+  local entry = data[dungeonName]
+  if not entry then
+    local want = normalizeDungeon(dungeonName)
+    for name, e in pairs(data) do
+      if normalizeDungeon(name) == want then entry = e break end
+    end
   end
+  if not entry then return nil end
+  local cohort = ZugZugKeysDB.lustReminderWclCohort or "p01"
+  if cohort ~= "top" and type(entry.cohorts) == "table" then
+    local c = entry.cohorts[cohort]
+    if type(c) == "table" and type(c.calls) == "table" and #c.calls > 0 then
+      return c
+    end
+  end
+  return entry
 end
 
 local function describeWclCall(c)
@@ -1384,6 +1403,7 @@ local function tryWclTargets(dungeonName)
       table.insert(state.targets, {
         kind = "boss", name = c.bossName, fired = false,
         support = c.support, runsAnalyzed = c.runsAnalyzed,
+        atMs = c.atMs, -- median cast time in top logs → timer-bar tick
       })
       table.insert(summary, describeWclCall(c))
     elseif c.type == "afterBoss" then
@@ -1393,6 +1413,7 @@ local function tryWclTargets(dungeonName)
         pullOffset = c.pullOffset or 1,
         fired = false,
         support = c.support, runsAnalyzed = c.runsAnalyzed,
+        atMs = c.atMs,
       })
       table.insert(summary, describeWclCall(c))
     end

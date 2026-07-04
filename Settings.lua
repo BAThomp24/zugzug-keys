@@ -246,8 +246,8 @@ local function CreateSettingsPanel()
   place(lustSoundToggle, IND_SUB, 8)
   local lustFallbackToggle = CreateToggle(lust, "First-boss / curated fallback when no route", "lustReminderCuratedFallback")
   place(lustFallbackToggle, IND_SUB, 4)
-  local lustBarMarksToggle = CreateToggle(lust, "Mark planned lusts on the forces bar", "lustReminderBarMarks",
-    "(green ticks; %-based calls only)",
+  local lustBarMarksToggle = CreateToggle(lust, "Mark planned lusts on the bars", "lustReminderBarMarks",
+    "(green ticks: MDT % calls on the forces bar, WCL calls on the key timer)",
     function() if Keys.RefreshForcesBarMarks then Keys.RefreshForcesBarMarks() end end)
   place(lustBarMarksToggle, IND_SUB, 4)
   local lustDebugToggle = CreateToggle(lust, "Debug logging", "lustReminderDebug")
@@ -306,6 +306,33 @@ local function CreateSettingsPanel()
   mdtRow = makeSourceBtn("mdt", "My MDT route", "(your imported route's lust marker)")
   place(mdtRow, IND_SUB2, 2)
   refreshSourceButtons()
+
+  -- WCL log bracket: rank-1 runs do degenerate routes most groups never
+  -- run; the ~1% / low-0.1% brackets are elite players on standard routes.
+  local cohortLabel = lust:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  cohortLabel:SetTextColor(0.85, 0.85, 0.85)
+  cohortLabel:SetText("WCL log bracket")
+  place(cohortLabel, IND_SUB, 14)
+
+  local cohortRows = {}
+  local function refreshCohortButtons()
+    local c = ZugZugKeysDB.lustReminderWclCohort or "p01"
+    for value, row in pairs(cohortRows) do
+      row.cb:SetChecked(value == c)
+    end
+  end
+  local function makeCohortBtn(value, label, subtitle)
+    local row = CreateCheckRow(lust, label .. "  |cff888888" .. subtitle .. "|r", function()
+      ZugZugKeysDB.lustReminderWclCohort = value
+      refreshCohortButtons()
+    end)
+    cohortRows[value] = row
+    return row
+  end
+  place(makeCohortBtn("p01", "Top 0.1% (low end)", "(~100 elite standard runs — default)"), IND_SUB2, 6)
+  place(makeCohortBtn("p1", "Top ~1%", "(~100 high-end pug-realistic runs)"), IND_SUB2, 2)
+  place(makeCohortBtn("top", "Rank 1-5", "(the absolute top — often degenerate pulls)"), IND_SUB2, 2)
+  refreshCohortButtons()
 
   local announceToggle = CreateToggle(lust, "Announce lust plan on ready check", "lustReminderAnnounce")
   place(announceToggle, IND_SUB, 12)

@@ -26,6 +26,8 @@ interface LustCall {
   support: number;
   runsAnalyzed: number;
   medianAt: number;
+  /** Median cast time in ms from run start (0/absent = unknown). */
+  medianAtMs?: number;
 }
 
 interface DungeonLustCalls {
@@ -33,6 +35,9 @@ interface DungeonLustCalls {
   runsAnalyzed: number;
   keystoneLevels: number[];
   calls: LustCall[];
+  /** Alternate leaderboard cohorts (p1 ≈ top-1%, p01 ≈ low end of top-0.1%);
+   *  the entry itself is the "top" cohort. */
+  cohorts?: Partial<Record<"p1" | "p01", Omit<DungeonLustCalls, "cohorts">>>;
 }
 
 interface LustCallsBlob {
@@ -46,7 +51,7 @@ function luaStr(s: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
 }
 
-function callToLua(c: LustCall): string {
+function callToLua(c: LustCall, indent: string): string {
   const fields: string[] = [`type = ${luaStr(c.type)}`];
   if (c.type === "boss") {
     fields.push(`bossName = ${luaStr(c.bossName ?? "")}`);
@@ -55,7 +60,37 @@ function callToLua(c: LustCall): string {
     fields.push(`pullOffset = ${c.pullOffset ?? 1}`);
   }
   fields.push(`support = ${c.support}`, `runsAnalyzed = ${c.runsAnalyzed}`);
-  return `      { ${fields.join(", ")} },`;
+  // Median cast time (ms from key start) → timer-bar tick in the addon.
+  if (typeof c.medianAtMs === "number" && c.medianAtMs > 0) {
+    fields.push(`atMs = ${Math.round(c.medianAtMs)}`);
+  }
+  return `${indent}{ ${fields.join(", ")} },`;
+}
+
+/** "24/24/23" for small samples, "23-25" for big ones (100-run cohorts
+ *  would otherwise write a 100-item string into the Lua). */
+function keyLevelSummary(levels: number[]): string {
+  if (levels.length === 0) return "?";
+  if (levels.length <= 6) return levels.join("/");
+  const min = Math.min(...levels);
+  const max = Math.max(...levels);
+  return min === max ? String(min) : `${min}-${max}`;
+}
+
+/** One cohort body (runsAnalyzed/keystoneLevels/calls) at the given indent. */
+function cohortBodyToLua(
+  d: Omit<DungeonLustCalls, "cohorts">,
+  generatedAt: string,
+  indent: string,
+): string[] {
+  const lines: string[] = [];
+  lines.push(`${indent}runsAnalyzed = ${d.runsAnalyzed},`);
+  lines.push(`${indent}keystoneLevels = ${luaStr(keyLevelSummary(d.keystoneLevels))},`);
+  lines.push(`${indent}generatedAt = ${luaStr(generatedAt)},`);
+  lines.push(`${indent}calls = {`);
+  for (const c of d.calls) lines.push(callToLua(c, indent + "  "));
+  lines.push(`${indent}},`);
+  return lines;
 }
 
 function blobToLua(blob: LustCallsBlob): string {
@@ -78,14 +113,24 @@ function blobToLua(blob: LustCallsBlob): string {
   lines.push("");
   lines.push("ZugZugKeysWclLustData = {");
   for (const d of blob.dungeons) {
-    if (d.calls.length === 0) continue;
+    const hasCohortCalls =
+      d.cohorts && Object.values(d.cohorts).some((c) => c && c.calls.length > 0);
+    if (d.calls.length === 0 && !hasCohortCalls) continue;
     lines.push(`  [${luaStr(d.dungeonName)}] = {`);
-    lines.push(`    runsAnalyzed = ${d.runsAnalyzed},`);
-    lines.push(`    keystoneLevels = ${luaStr(d.keystoneLevels.join("/"))},`);
-    lines.push(`    generatedAt = ${luaStr(blob.generatedAt)},`);
-    lines.push(`    calls = {`);
-    for (const c of d.calls) lines.push(callToLua(c));
-    lines.push(`    },`);
+    // Top-level body = the "top" (rank 1-N) cohort — also the fallback the
+    // addon uses when a selected cohort is missing/empty.
+    lines.push(...cohortBodyToLua(d, blob.generatedAt, "    "));
+    if (hasCohortCalls) {
+      lines.push(`    cohorts = {`);
+      for (const key of ["p1", "p01"] as const) {
+        const c = d.cohorts?.[key];
+        if (!c || c.calls.length === 0) continue;
+        lines.push(`      ${key} = {`);
+        lines.push(...cohortBodyToLua(c, blob.generatedAt, "        "));
+        lines.push(`      },`);
+      }
+      lines.push(`    },`);
+    }
     lines.push(`  },`);
   }
   lines.push("}");
@@ -96,6 +141,15 @@ function blobToLua(blob: LustCallsBlob): string {
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 async function fetchBlob(): Promise<LustCallsBlob> {
+  // Highest priority: a pre-derived blob file (e.g. from a local sweep run
+  // when WCL's per-IP throttle blocks deriving from shared egress IPs).
+  const blobFile = process.env.LUST_BLOB_FILE;
+  if (blobFile) {
+    console.log(`Reading blob from ${blobFile} ...`);
+    const { readFileSync } = await import("node:fs");
+    return JSON.parse(readFileSync(blobFile, "utf-8")) as LustCallsBlob;
+  }
+
   const clientId = process.env.WCL_V2_CLIENT_ID;
   const clientSecret = process.env.WCL_V2_CLIENT_SECRET;
   if (clientId && clientSecret) {
