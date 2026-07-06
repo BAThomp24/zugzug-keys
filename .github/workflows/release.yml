@@ -15,6 +15,7 @@ on:
       - "README.md"
       - ".gitignore"
       - ".github/**"
+      - "scripts/**"
   workflow_dispatch: # manual trigger from the Actions tab
 
 jobs:

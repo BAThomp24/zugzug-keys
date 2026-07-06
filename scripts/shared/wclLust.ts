@@ -196,11 +196,17 @@ export function consensusCalls(
 
 // WCL enforces an hourly points budget AND a burst per-IP throttle — ~230
 // unpaced requests inside two minutes trips the latter (observed live
-// 2026-07-04 from the worker's Cloudflare egress). Pace every call and
-// back off + retry when a 429 slips through anyway.
+// 2026-07-04 from the worker's Cloudflare egress), and a full 8-dungeon ×
+// 3-cohort sweep can EXHAUST the points budget near the end (observed
+// 2026-07-06: the final dungeon 429'd terminally and fell out of the
+// blob). The budget is per API client, so a fresh runner IP doesn't help.
+// Pace every call; on 429 retry with escalating waits — two short 65s
+// backoffs cover the burst throttle, then 5-minute waits ride out the
+// hourly points window (~72 min worst case before giving up).
 const WCL_PACE_MS = 500;
 const WCL_429_BACKOFF_MS = 65_000;
-const WCL_429_RETRIES = 2;
+const WCL_429_LONG_BACKOFF_MS = 300_000;
+const WCL_429_RETRIES = 16; // 2×65s + 14×5min
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -215,8 +221,9 @@ async function wclFetch(token: string, query: string): Promise<Response> {
       body: JSON.stringify({ query }),
     });
     if (res.status === 429 && attempt < WCL_429_RETRIES) {
-      console.warn(`[wcl] 429 — backing off ${WCL_429_BACKOFF_MS / 1000}s (attempt ${attempt + 1})`);
-      await sleep(WCL_429_BACKOFF_MS);
+      const wait = attempt < 2 ? WCL_429_BACKOFF_MS : WCL_429_LONG_BACKOFF_MS;
+      console.warn(`[wcl] 429 — backing off ${Math.round(wait / 1000)}s (attempt ${attempt + 1}/${WCL_429_RETRIES})`);
+      await sleep(wait);
       continue;
     }
     await sleep(WCL_PACE_MS);

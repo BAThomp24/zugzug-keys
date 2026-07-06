@@ -16,7 +16,9 @@ on:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Sweep is ~45 min; if the WCL hourly points budget runs dry mid-sweep
+    # the fetch layer waits it out in 5-min steps (up to ~72 min extra).
+    timeout-minutes: 150
     permissions:
       contents: write
 

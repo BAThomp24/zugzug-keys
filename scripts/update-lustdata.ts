@@ -17,6 +17,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { refreshLustCalls } from "./shared/wclLust.js";
+import { DUNGEONS } from "./shared/encounters.js";
 
 // ─── Types (mirror zugzug.info shared/src/wclLust.ts — kept minimal) ────────
 
@@ -180,6 +181,14 @@ async function main() {
 
   if (withCalls.length === 0) {
     throw new Error("Blob contains zero calls — refusing to write an empty LustDataWCL.lua");
+  }
+  // Partial sweeps happen when WCL's hourly points budget dries up and the
+  // escalating backoff still gives out — shipping one would silently drop
+  // a dungeon's calls until next week. Keep the committed file instead.
+  if (withCalls.length < DUNGEONS.length) {
+    throw new Error(
+      `Only ${withCalls.length}/${DUNGEONS.length} dungeons derived calls — refusing to write a degraded LustDataWCL.lua`,
+    );
   }
 
   const __dirname = dirname(fileURLToPath(import.meta.url));
