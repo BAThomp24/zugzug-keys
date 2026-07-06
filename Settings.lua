@@ -406,7 +406,7 @@ local function CreateSettingsPanel()
   local footer = panel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
   footer:SetPoint("RIGHT", panel, "RIGHT", -CARD_MARGIN, 0)
   footer:SetJustifyH("LEFT")
-  footer:SetText("|cff555555Type|r |cff" .. GREEN_HEX .. "/zzk|r|cff555555 for commands  ·  zugzug.info|r")
+  footer:SetText("|cff555555Type|r |cff" .. GREEN_HEX .. "/zzk|r|cff555555 for commands|r")
   place(footer, CARD_MARGIN, 18)
 
   ------------------------------------------------------------------

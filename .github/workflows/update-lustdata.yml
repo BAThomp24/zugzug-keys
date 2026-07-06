@@ -1,9 +1,13 @@
 name: Update WCL lust data
 
-# Weekly regeneration of LustDataWCL.lua from the cron worker's derived
-# consensus (which itself refreshes Wednesdays 04:00 UTC). Runs Thursdays
-# so the worker's fresh weekly data is always in. A commit here triggers
-# the normal release workflow, which ships the new zip to CurseForge.
+# Weekly regeneration of LustDataWCL.lua, derived DIRECTLY from
+# WarcraftLogs top M+ logs via the vendored scripts/shared/wclLust.ts —
+# no website/worker dependency (the zugzug.info infrastructure was
+# decommissioned). The sweep is ~1.7k paced requests, ~15-20 minutes;
+# runners get a fresh egress IP per run, so WCL's per-IP throttle isn't
+# the problem it was on shared worker IPs. Runs Thursdays so the week's
+# reset logs have accumulated. A commit here triggers the normal release
+# workflow, which ships the new zip to CurseForge.
 on:
   schedule:
     - cron: "0 6 * * 4" # Thursday 06:00 UTC
@@ -12,6 +16,7 @@ on:
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: write
 
@@ -22,7 +27,10 @@ jobs:
         with:
           node-version: 22
 
-      - name: Regenerate LustDataWCL.lua from /api/lust-calls
+      - name: Regenerate LustDataWCL.lua from WarcraftLogs
+        env:
+          WCL_V2_CLIENT_ID: ${{ secrets.WCL_V2_CLIENT_ID }}
+          WCL_V2_CLIENT_SECRET: ${{ secrets.WCL_V2_CLIENT_SECRET }}
         run: npx tsx scripts/update-lustdata.ts
 
       - name: Commit if changed

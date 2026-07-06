@@ -148,8 +148,10 @@ end
 --- bar's width plus a fired flag; drains flips the axis (Blizzard's key
 --- timer fills with time REMAINING, so elapsed moments sit mirrored).
 --- Time-channel marks also carry atSec — a small countdown label renders
---- under the bar showing how long until that lust ("2:41"), joining the
---- same under-bar row EllesmereUI uses for its +2/+3 threshold times.
+--- INSIDE the bar (bottom-aligned at the tick) showing how long until
+--- that lust ("2:41"). Inside, not under: the space below the timer bar
+--- belongs to the host's next row (EllesmereUI parks its Enemy Forces bar
+--- right there), so an under-bar label overlapped the forces % bar.
 local function layoutOverlay(ov, marks, drains, elapsedSec)
   local width = ov:GetWidth() or 0
   local shown = 0
@@ -185,9 +187,15 @@ local function layoutOverlay(ov, marks, drains, elapsedSec)
             label:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
             ov.labels[shown] = label
           end
-          label:ClearAllPoints()
-          label:SetPoint("TOP", ov, "BOTTOMLEFT", x, -2)
           label:SetText(formatMMSS(remain))
+          label:ClearAllPoints()
+          -- Digits sit just right of the 2px tick — unless that would run
+          -- past the bar's right edge, in which case flip to the left side.
+          if x + 3 + label:GetStringWidth() > width - 1 then
+            label:SetPoint("BOTTOMRIGHT", ov, "BOTTOMLEFT", x - 3, 1)
+          else
+            label:SetPoint("BOTTOMLEFT", ov, "BOTTOMLEFT", x + 3, 1)
+          end
           -- Green while distant, warm cream inside the final minute.
           if remain <= 60 then label:SetTextColor(1, 0.96, 0.74)
           else label:SetTextColor(TICK_R, TICK_G, TICK_B) end

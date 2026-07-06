@@ -66,7 +66,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ZugZug Keys ${{ steps.version.outputs.tag }}
           body: |
-            Mythic+ tools and tweaks — companion addon to [ZugZug](https://zugzug.info).
+            Mythic+ tools and tweaks — companion addon to [ZugZug Specs](https://www.curseforge.com/wow/addons/zugzug-specs).
 
             Download `ZugZugKeys.zip` and extract into your
             `Interface/AddOns/` folder, or install via CurseForge/WoWUp.

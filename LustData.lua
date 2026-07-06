@@ -17,7 +17,7 @@
 -- wrong). Grab the mapID + encounterID with /zzk lust debug output or
 -- from ENCOUNTER_START in /eventtrace during a key.
 --
--- Midnight S1 pool (see zugzug.info shared/src/encounters.ts):
+-- Midnight S1 pool (see scripts/shared/encounters.ts):
 --   Algeth'ar Academy · Magisters' Terrace · Maisara Caverns ·
 --   Nexus-Point Xenas · Pit of Saron · Seat of Triumvirate ·
 --   Skyreach · Windrunner Spire

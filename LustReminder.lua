@@ -1397,7 +1397,6 @@ local function tryWclTargets(dungeonName)
   local entry = findWclCalls(dungeonName)
   if not entry or type(entry.calls) ~= "table" or #entry.calls == 0 then return false end
 
-  local summary = {}
   for _, c in ipairs(entry.calls) do
     if c.type == "boss" and c.bossName then
       table.insert(state.targets, {
@@ -1405,7 +1404,6 @@ local function tryWclTargets(dungeonName)
         support = c.support, runsAnalyzed = c.runsAnalyzed,
         atMs = c.atMs, -- median cast time in top logs → timer-bar tick
       })
-      table.insert(summary, describeWclCall(c))
     elseif c.type == "afterBoss" then
       table.insert(state.targets, {
         kind = "afterBoss",
@@ -1415,7 +1413,6 @@ local function tryWclTargets(dungeonName)
         support = c.support, runsAnalyzed = c.runsAnalyzed,
         atMs = c.atMs,
       })
-      table.insert(summary, describeWclCall(c))
     end
   end
   if #state.targets == 0 then return false end
@@ -1423,8 +1420,8 @@ local function tryWclTargets(dungeonName)
   state.source    = "wcl"
   state.routeNote = string.format("WCL top-log consensus (%s runs, keys %s)",
     tostring(entry.runsAnalyzed or "?"), tostring(entry.keystoneLevels or "?"))
-  lusterPrint("|cffff8800ZugZug Keys:|r WCL top-log lust plan: "
-    .. table.concat(summary, " → "))
+  -- No local chat line here — the ready-check/key-start "[ZugZug] Lust
+  -- plan:" announce carries the identical summary; printing both spammed.
   return true
 end
 

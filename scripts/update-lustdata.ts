@@ -1,20 +1,22 @@
 /**
- * Fetch WCL-derived lust calls and regenerate LustDataWCL.lua.
+ * Derive WCL lust calls and regenerate LustDataWCL.lua.
  *
  * Usage:  npx tsx scripts/update-lustdata.ts
+ * Env:    WCL_V2_CLIENT_ID / WCL_V2_CLIENT_SECRET — WarcraftLogs v2 API
+ *         credentials (required; free at warcraftlogs.com/api/clients).
+ *         LUST_BLOB_FILE — optional pre-derived JSON blob, skips the sweep.
  *
- * Default source is the cron worker's public endpoint (the worker derives
- * the calls weekly from top WCL M+ logs). For local experimentation you can
- * bypass the worker and hit WCL directly by setting WCL_V2_CLIENT_ID and
- * WCL_V2_CLIENT_SECRET in the environment — the script then imports the
- * shared derivation module from the sibling zugzug.info repo.
+ * Derives directly from WarcraftLogs top M+ logs via the vendored
+ * scripts/shared/wclLust.ts (originally zugzug.info/shared/src — vendored
+ * when the website was decommissioned). The sweep is ~1.7k paced requests,
+ * roughly 15-20 minutes.
  */
 
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
-const API_URL = "https://zugzug-cron.zugzugio.workers.dev/api/lust-calls";
+import { refreshLustCalls } from "./shared/wclLust.js";
 
 // ─── Types (mirror zugzug.info shared/src/wclLust.ts — kept minimal) ────────
 
@@ -152,27 +154,20 @@ async function fetchBlob(): Promise<LustCallsBlob> {
 
   const clientId = process.env.WCL_V2_CLIENT_ID;
   const clientSecret = process.env.WCL_V2_CLIENT_SECRET;
-  if (clientId && clientSecret) {
-    console.log("WCL creds in env — deriving directly from WarcraftLogs...");
-    const sharedPath = resolve(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../zugzug.info/shared/src/wclLust.ts",
+  if (!clientId || !clientSecret) {
+    throw new Error(
+      "WCL_V2_CLIENT_ID / WCL_V2_CLIENT_SECRET not set — required to derive lust calls from WarcraftLogs.",
     );
-    const shared = await import(pathToFileURL(sharedPath).href);
-    const store = new Map<string, string>();
-    const fakeKV = {
-      get: async (k: string) => store.get(k) ?? null,
-      put: async (k: string, v: string) => void store.set(k, v),
-    };
-    return (await shared.refreshLustCalls({ clientId, clientSecret }, fakeKV)) as LustCallsBlob;
   }
-
-  console.log(`Fetching ${API_URL} ...`);
-  const res = await fetch(API_URL, { headers: { Accept: "application/json" } });
-  if (!res.ok) {
-    throw new Error(`API returned ${res.status}: ${await res.text()}`);
-  }
-  return (await res.json()) as LustCallsBlob;
+  console.log("Deriving directly from WarcraftLogs...");
+  // refreshLustCalls was written against Cloudflare KV; feed it an
+  // in-memory stub (we only want the returned blob, not persistence).
+  const store = new Map<string, string>();
+  const fakeKV = {
+    get: async (k: string) => store.get(k) ?? null,
+    put: async (k: string, v: string) => void store.set(k, v),
+  };
+  return (await refreshLustCalls({ clientId, clientSecret }, fakeKV)) as LustCallsBlob;
 }
 
 async function main() {
