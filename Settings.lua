@@ -25,6 +25,28 @@ local Keys = _G.ZugZugKeys
 local GREEN     = { 0.56, 0.75, 0.25 }
 local GREEN_HEX = "8fbf3f"
 
+-- Sibling addon (ZugZug Specs) coordinates.
+local SPECS_FOLDER = "ZugZug"
+local SPECS_CF_URL = "https://www.curseforge.com/wow/addons/zugzug-specs"
+
+local function specsInstalled()
+  if _G.ZugZug then return true end
+  if C_AddOns and C_AddOns.GetAddOnInfo then
+    return C_AddOns.GetAddOnInfo(SPECS_FOLDER) ~= nil
+  end
+  return false
+end
+
+--- The shared "ZugZug" parent category — whichever addon loads first
+--- creates it; both nest their panel under it as a subcategory.
+local function ensureParentCategory()
+  if _G.ZugZugSettingsParentCategory then return _G.ZugZugSettingsParentCategory end
+  local cat = Settings.RegisterVerticalLayoutCategory("ZugZug")
+  Settings.RegisterAddOnCategory(cat)
+  _G.ZugZugSettingsParentCategory = cat
+  return cat
+end
+
 -- Text right-edge inset (inside a card) so labels wrap before the border.
 local RIGHT_PAD   = 16
 local CARD_MARGIN = 14   -- card inset from the panel's left/right edges
@@ -44,7 +66,7 @@ local TITLE_FONT   = _G.GameFontNormalHuge and "GameFontNormalHuge" or "GameFont
 
 local function CreateSettingsPanel()
   local canvas = CreateFrame("Frame", "ZugZugKeysSettingsPanel")
-  canvas.name = "ZugZug Keys"
+  canvas.name = "Keys"
 
   -- Scroll wrapper: the panel has outgrown small resolutions / UI scales.
   local scrollFrame = CreateFrame("ScrollFrame", "ZugZugKeysSettingsScroll", canvas, "UIPanelScrollFrameTemplate")
@@ -193,9 +215,45 @@ local function CreateSettingsPanel()
   place(sub, CARD_MARGIN, 8)
 
   ------------------------------------------------------------------
+  -- Companion — switch to ZugZug Specs, or offer to install it.
+  ------------------------------------------------------------------
+  local comp = beginSection("Companion Addon", 22)
+  if specsInstalled() then
+    local n = CreateNote(comp, "ZugZug Specs is installed — top raid & Mythic+ talent builds with one-click import, plus a leveling guide.")
+    place(n, IND_ITEM, 6)
+    local openBtn = CreateFrame("Button", nil, comp, "UIPanelButtonTemplate")
+    openBtn:SetSize(200, 22)
+    openBtn:SetText("Open ZugZug Specs settings")
+    openBtn:SetScript("OnClick", function()
+      local cat = _G.ZugZugSpecsCategory
+      if cat and cat.GetID and Settings and Settings.OpenToCategory then
+        Settings.OpenToCategory(cat:GetID())
+      elseif Settings and Settings.OpenToCategory then
+        Settings.OpenToCategory("Specs")
+      end
+    end)
+    place(openBtn, IND_ITEM, 8)
+  else
+    local n = CreateNote(comp, "ZugZug Specs is a companion addon (top talent builds + one-click import + leveling guide) — it isn't installed. Copy the link below (Ctrl+C) to grab it:")
+    place(n, IND_ITEM, 6)
+    local box = CreateFrame("EditBox", nil, comp, "InputBoxTemplate")
+    box:SetSize(300, 22)
+    box:SetAutoFocus(false)
+    box:SetFontObject("GameFontHighlightSmall")
+    box:SetText(SPECS_CF_URL)
+    box:SetCursorPosition(0)
+    box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    box:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    box:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
+    box:SetScript("OnTextChanged", function(self) self:SetText(SPECS_CF_URL); self:SetCursorPosition(0) end)
+    place(box, IND_ITEM + 6, 8)
+  end
+  endSection(comp, 12)
+
+  ------------------------------------------------------------------
   -- General
   ------------------------------------------------------------------
-  local gen = beginSection("General", 22)
+  local gen = beginSection("General", 34)
 
   local bnToggle = CreateToggle(gen, "BNet Status Broadcast", "bnStatus",
     "(updates your Battle.net message when a key starts)")
@@ -391,9 +449,10 @@ frame:RegisterEvent("PLAYER_LOGIN")
 frame:SetScript("OnEvent", function(self)
   local ok, err = pcall(function()
     local panel = CreateSettingsPanel()
-    local category = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
-    Settings.RegisterAddOnCategory(category)
-    Keys.settingsCategory = category
+    local parent = ensureParentCategory()
+    local subcategory = Settings.RegisterCanvasLayoutSubcategory(parent, panel, panel.name)
+    _G.ZugZugKeysCategory = subcategory
+    Keys.settingsCategory = subcategory
   end)
   if not ok then
     print("|cff8fbf3fZugZug Keys:|r Settings panel failed: " .. tostring(err))

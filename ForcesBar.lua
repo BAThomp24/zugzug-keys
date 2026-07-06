@@ -69,6 +69,21 @@ local function keyTimeLimitMs()
   return (type(s) == "number" and s > 0) and (s * 1000) or nil
 end
 
+--- Elapsed key time in seconds, from the world timer (id 1 = the M+ timer;
+--- same source EllesmereUI uses, correct across /reload). 12.0 can hand
+--- back Secret Values here, so everything is pcall'd + safeNum-guarded.
+local function keyElapsedSec()
+  local ok, elapsed = pcall(function() return select(2, GetWorldElapsedTime(1)) end)
+  if not ok then return nil end
+  if Keys.safeNum then elapsed = Keys.safeNum(elapsed) end
+  return (type(elapsed) == "number" and elapsed > 0) and elapsed or nil
+end
+
+local function formatMMSS(sec)
+  sec = math.max(0, math.floor(sec + 0.5))
+  return string.format("%d:%02d", math.floor(sec / 60), sec % 60)
+end
+
 --- Collect every visible bar region we know how to decorate.
 --- Each spec: { region, channel = "pct"|"time", drains = bool }.
 local function collectBarSpecs()
@@ -132,7 +147,10 @@ end
 --- Place ticks on one overlay. Each mark is an x-fraction (0..1) of the
 --- bar's width plus a fired flag; drains flips the axis (Blizzard's key
 --- timer fills with time REMAINING, so elapsed moments sit mirrored).
-local function layoutOverlay(ov, marks, drains)
+--- Time-channel marks also carry atSec — a small countdown label renders
+--- under the bar showing how long until that lust ("2:41"), joining the
+--- same under-bar row EllesmereUI uses for its +2/+3 threshold times.
+local function layoutOverlay(ov, marks, drains, elapsedSec)
   local width = ov:GetWidth() or 0
   local shown = 0
   if width > 2 then
@@ -155,10 +173,35 @@ local function layoutOverlay(ov, marks, drains)
         tick:SetPoint("BOTTOM", ov, "BOTTOMLEFT", x, -1)
         tick:SetColorTexture(TICK_R, TICK_G, TICK_B, mark.fired and 0.35 or 0.95)
         tick:Show()
+
+        -- Countdown label under the tick (time marks only, until it fires).
+        local remain = (not mark.fired and type(mark.atSec) == "number" and elapsedSec)
+          and (mark.atSec - elapsedSec) or nil
+        local label = ov.labels and ov.labels[shown]
+        if remain and remain > 0 then
+          if not label then
+            ov.labels = ov.labels or {}
+            label = ov:CreateFontString(nil, "OVERLAY")
+            label:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+            ov.labels[shown] = label
+          end
+          label:ClearAllPoints()
+          label:SetPoint("TOP", ov, "BOTTOMLEFT", x, -2)
+          label:SetText(formatMMSS(remain))
+          -- Green while distant, warm cream inside the final minute.
+          if remain <= 60 then label:SetTextColor(1, 0.96, 0.74)
+          else label:SetTextColor(TICK_R, TICK_G, TICK_B) end
+          label:Show()
+        elseif label then
+          label:Hide()
+        end
       end
     end
   end
   for i = shown + 1, #ov.ticks do ov.ticks[i]:Hide() end
+  if ov.labels then
+    for i = shown + 1, #ov.labels do ov.labels[i]:Hide() end
+  end
   ov:Show()
 end
 
@@ -181,7 +224,7 @@ local function marksForChannel(channel)
   local out = {}
   for _, m in ipairs(timeList) do
     if type(m.atMs) == "number" and m.atMs > 0 and m.atMs < limitMs then
-      table.insert(out, { frac = m.atMs / limitMs, fired = m.fired })
+      table.insert(out, { frac = m.atMs / limitMs, fired = m.fired, atSec = m.atMs / 1000 })
     end
   end
   return #out > 0 and out or nil
@@ -194,7 +237,9 @@ end
 local function ensureTicker()
   local wantTicker = (pctList or timeList) and true or false
   if wantTicker and not ticker then
-    ticker = C_Timer.NewTicker(2, scheduleRefresh)
+    -- 1s cadence: the countdown labels under the timer-bar ticks step
+    -- per-second; the layout work per pass is a handful of SetPoints.
+    ticker = C_Timer.NewTicker(1, scheduleRefresh)
   elseif not wantTicker and ticker then
     ticker:Cancel()
     ticker = nil
@@ -210,10 +255,11 @@ function Keys.__applyBarMarks()
   local enabled = not (ZugZugKeysDB and ZugZugKeysDB.lustReminderBarMarks == false)
   for _, ov in pairs(overlays) do ov:Hide() end
   if not enabled then return end
+  local elapsedSec = timeList and keyElapsedSec() or nil
   for _, spec in ipairs(collectBarSpecs()) do
     local marks = marksForChannel(spec.channel)
     if marks then
-      layoutOverlay(getOverlay(spec.region), marks, spec.drains)
+      layoutOverlay(getOverlay(spec.region), marks, spec.drains, elapsedSec)
     end
   end
 end
