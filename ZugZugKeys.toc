@@ -1,4 +1,4 @@
-## Interface: 120007
+## Interface: 120100
 ## Title: ZugZug Keys — Mythic+ Tools
 ## Notes: Mythic+ tools and tweaks — a companion to ZugZug Specs. Broadcasts your key start time + estimated finish to your BNet status. More features coming.
 ## Author: ZUGZUG.io
