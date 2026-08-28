@@ -17,14 +17,31 @@ export const BOSSES: Boss[] = [
   { id: 3159, name: "Rotmire", sideInstance: true },
 ];
 
-/** Current Mythic+ dungeon pool. */
+/** Current Mythic+ dungeon pool — Midnight Season 2 (from 2026-08-18).
+ *
+ * These are WarcraftLogs ENCOUNTER ids, and they change every season. To
+ * roll over, take the encounters of the one unfrozen "Mythic+ Season N"
+ * zone under the current expansion:
+ *
+ *   { worldData { expansions { name zones { id name frozen
+ *       encounters { id name } } } } }
+ *
+ * Getting this wrong fails quietly rather than loudly: the previous
+ * season's zone still answers, with frozen historical logs, so the
+ * weekly job keeps "succeeding" and shipping calls for dungeons nobody
+ * is running. Season 1's pool sat here for the first ten days of Season
+ * 2 and every lust reminder in a key came back empty.
+ *
+ * Names are WCL's; LustReminder's normalizeDungeon() folds punctuation
+ * and "the" away, so a differing apostrophe still matches the in-game name.
+ */
 export const DUNGEONS: Dungeon[] = [
-  { id: 112526, name: "Algeth'ar Academy" },
-  { id: 12811, name: "Magisters' Terrace" },
-  { id: 12874, name: "Maisara Caverns" },
-  { id: 12915, name: "Nexus-Point Xenas" },
-  { id: 10658, name: "Pit of Saron" },
-  { id: 361753, name: "Seat of Triumvirate" },
-  { id: 61209, name: "Skyreach" },
-  { id: 12805, name: "Windrunner Spire" },
+  { id: 12993, name: "Altar of Fangs" },
+  { id: 12825, name: "Den of Nalorakk" },
+  { id: 61762, name: "King's Rest" },
+  { id: 12813, name: "Murder Row" },
+  { id: 112521, name: "Ruby Life Pools" },
+  { id: 61877, name: "Temple of Sethraliss" },
+  { id: 12859, name: "The Blinding Vale" },
+  { id: 12923, name: "Voidscar Arena" },
 ];

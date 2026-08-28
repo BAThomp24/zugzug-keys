@@ -17,6 +17,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { refreshLustCalls } from "./shared/wclLust.js";
+import { getV2Token } from "./shared/wclv2.js";
 import { DUNGEONS } from "./shared/encounters.js";
 
 // ─── Types (mirror zugzug.info shared/src/wclLust.ts — kept minimal) ────────
@@ -171,7 +172,61 @@ async function fetchBlob(): Promise<LustCallsBlob> {
   return (await refreshLustCalls({ clientId, clientSecret }, fakeKV)) as LustCallsBlob;
 }
 
+/**
+ * Refuse to run against last season's dungeons.
+ *
+ * The completeness guard below can't catch this: a finished season's
+ * zone still answers, with frozen historical logs, so a stale pool
+ * returns a full 8/8 and the weekly job goes on "succeeding" while every
+ * lust reminder in a live key comes back empty. It went unnoticed for
+ * ten days. WarcraftLogs marks a season's zone frozen when it ends, so
+ * ask it outright.
+ */
+async function assertPoolIsCurrent(clientId: string, clientSecret: string) {
+  const { token } = await getV2Token(clientId, clientSecret);
+  const res = await fetch("https://www.warcraftlogs.com/api/v2/client", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: `{ worldData { expansions { zones { id name frozen encounters { id } } } } }`,
+    }),
+  });
+  if (!res.ok) {
+    console.warn(`Couldn't check the dungeon pool (HTTP ${res.status}) — carrying on.`);
+    return;
+  }
+  const json: any = await res.json();
+  const zones = (json?.data?.worldData?.expansions ?? []).flatMap((e: any) => e.zones ?? []);
+  const live = new Set<number>();
+  for (const z of zones) {
+    if (z?.frozen) continue;
+    for (const e of z.encounters ?? []) live.add(e.id);
+  }
+  if (live.size === 0) {
+    console.warn("WarcraftLogs listed no unfrozen zones — skipping the pool check.");
+    return;
+  }
+  const stale = DUNGEONS.filter((d) => !live.has(d.id));
+  if (stale.length) {
+    const current = zones
+      .filter((z: any) => !z.frozen && /Mythic\+/i.test(z.name ?? ""))
+      .map((z: any) => `${z.name} (zone ${z.id})`)
+      .join(", ");
+    throw new Error(
+      `${stale.length} of ${DUNGEONS.length} configured dungeons are not in any live ` +
+        `WarcraftLogs zone: ${stale.map((d) => d.name).join(", ")}. The season has ` +
+        `probably rolled over — update DUNGEONS in scripts/shared/encounters.ts from ` +
+        `${current || "the current Mythic+ zone"}.`,
+    );
+  }
+}
+
 async function main() {
+  const preflightId = process.env.WCL_V2_CLIENT_ID;
+  const preflightSecret = process.env.WCL_V2_CLIENT_SECRET;
+  if (preflightId && preflightSecret) {
+    await assertPoolIsCurrent(preflightId, preflightSecret);
+  }
   const blob = await fetchBlob();
   const withCalls = blob.dungeons.filter((d) => d.calls.length > 0);
   console.log(`Got calls for ${withCalls.length}/${blob.dungeons.length} dungeons (generated ${blob.generatedAt})`);
