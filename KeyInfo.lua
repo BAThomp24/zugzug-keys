@@ -29,25 +29,93 @@ local teleportByDungeonLower = {}
 -- [mapID] = spellID  (filled best-effort from the same scan)
 local teleportByMapID = {}
 
--- Spell ID table for current-season M+ dungeon teleports, keyed by the
--- challenge mapID. Dynamic name-based discovery isn't possible in 12.0:
---   * legacy global `GetSpellInfo` was removed
---   * `C_Spell.GetSpellInfo(name)` only accepts numeric IDs
---   * achievement-reward teleport spells don't show in C_SpellBook
---     iteration either
--- So we maintain this table by hand each season. Sourced from in-game
--- spell tooltips (verified 2026-06-11 for Midnight Season 1). When a
--- new season ships, the dungeon line-up and spell IDs change — update
--- the entries here and the addon will discover them on next /reload.
-local TELEPORT_BY_MAPID = {
-  [402] = 393273,   -- Path of the Draconic Diploma (Algeth'ar Academy)
-  [239] = 1254551,  -- Path of Dark Dereliction     (Seat of the Triumvirate)
-  [556] = 1254555,  -- Path of Unyielding Blight    (Pit of Saron)
-  [161] = 159898,   -- Path of the Skies            (Skyreach)
-  [560] = 1254559,  -- Path of Cavernous Depths     (Maisara Caverns)
-  [559] = 1254563,  -- Path of the Fractured Core   (Nexus-Point Xenas)
-  [558] = 1254572,  -- Path of Devoted Magistry     (Magisters' Terrace)
-  [557] = 1254400,  -- Path of the Windrunners      (Windrunner Spire)
+-- M+ dungeon teleport spells, keyed by NORMALIZED dungeon name.
+--
+-- Name-keyed rather than keyed by challenge mapID, and covering every
+-- dungeon rather than one season's eight, because both of those change
+-- and the table did not: Season 2 arrived, the eight mapIDs here stopped
+-- matching anything the game offered, and the teleport button simply
+-- never appeared. Challenge mapIDs now come from the game itself at
+-- discovery time, so only a genuinely NEW dungeon needs an entry here —
+-- a returning one already has one.
+--
+-- Dynamic lookup still isn't possible: 12.0 removed the global
+-- GetSpellInfo, C_Spell.GetSpellInfo(name) takes only numeric ids, and
+-- achievement-reward teleports don't appear in C_SpellBook iteration.
+-- Spell ids sourced from BigWigs' maintained keystone table.
+local TELEPORT_BY_DUNGEON = {
+  ["algethar academy"] = 393273,        -- Algeth'ar Academy
+  ["altar of fangs"] = 1286812,         -- Altar of Fangs
+  ["ara kara city of echoes"] = 445417, -- Ara-Kara, City of Echoes
+  ["ataldazar"] = 424187,               -- Atal'Dazar
+  ["auchindoun"] = 159897,              -- Auchindoun
+  ["black rook hold"] = 424153,         -- Black Rook Hold
+  ["bloodmaul slag mines"] = 159895,    -- Bloodmaul Slag Mines
+  ["brackenhide hollow"] = 393267,      -- Brackenhide Hollow
+  ["cinderbrew meadery"] = 445440,      -- Cinderbrew Meadery
+  ["city of threads"] = 445416,         -- City of Threads
+  ["court of stars"] = 393766,          -- Court of Stars
+  ["darkflame cleft"] = 445441,         -- Darkflame Cleft
+  ["darkheart thicket"] = 424163,       -- Darkheart Thicket
+  ["dawn of the infinite"] = 424197,    -- Dawn of the Infinite
+  ["de other side"] = 354468,           -- De Other Side
+  ["den of nalorakk"] = 1286807,        -- Den of Nalorakk
+  ["eco dome aldani"] = 1237215,        -- Eco-Dome Al'dani
+  ["freehold"] = 410071,                -- Freehold
+  ["gate of the setting sun"] = 131225, -- Gate of the Setting Sun
+  ["grim batol"] = 445424,              -- Grim Batol
+  ["grimrail depot"] = 159900,          -- Grimrail Depot
+  ["halls of atonement"] = 354465,      -- Halls of Atonement
+  ["halls of infusion"] = 393283,       -- Halls of Infusion
+  ["halls of valor"] = 393764,          -- Halls of Valor
+  ["iron docks"] = 159896,              -- Iron Docks
+  ["kings rest"] = 1286831,             -- King's Rest
+  ["magisters terrace"] = 1254572,      -- Magisters' Terrace
+  ["maisara caverns"] = 1254559,        -- Maisara Caverns
+  ["mists of tirna scithe"] = 354464,   -- Mists of Tirna Scithe
+  ["mogushan palace"] = 131222,         -- Mogu'shan Palace
+  ["murder row"] = 1286809,             -- Murder Row
+  ["neltharions lair"] = 410078,        -- Neltharion's Lair
+  ["neltharus"] = 393276,               -- Neltharus
+  ["nexus point xenas"] = 1254563,      -- Nexus-Point Xenas
+  ["operation floodgate"] = 1216786,    -- Operation: Floodgate
+  ["operation mechagon"] = 373274,      -- Operation: Mechagon
+  ["pit of saron"] = 1254555,           -- Pit of Saron
+  ["plaguefall"] = 354463,              -- Plaguefall
+  ["priory of the sacred flame"] = 445444, -- Priory of the Sacred Flame
+  ["return to karazhan"] = 373262,      -- Return to Karazhan
+  ["ruby life pools"] = 393256,         -- Ruby Life Pools
+  ["sanguine depths"] = 354469,         -- Sanguine Depths
+  ["scarlet halls"] = 131231,           -- Scarlet Halls
+  ["scarlet monastery"] = 131229,       -- Scarlet Monastery
+  ["scholomance"] = 131232,             -- Scholomance
+  ["seat of the triumvirate"] = 1254551, -- Seat of the Triumvirate
+  ["shado pan monastery"] = 131206,     -- Shado-Pan Monastery
+  ["shadowmoon burial grounds"] = 159899, -- Shadowmoon Burial Grounds
+  ["siege of niuzao temple"] = 131228,  -- Siege of Niuzao Temple
+  ["skyreach xxx 1254557 was also added which will be used"] = 159898, -- Skyreach -- XXX 1254557 was also added, which will be used..?
+  ["spires of ascension"] = 354466,     -- Spires of Ascension
+  ["stormstout brewery"] = 131205,      -- Stormstout Brewery
+  ["tazavesh the veiled market"] = 367416, -- Tazavesh, the Veiled Market
+  ["temple of sethraliss"] = 1286828,   -- Temple of Sethraliss
+  ["temple of the jade serpent"] = 131204, -- Temple of the Jade Serpent
+  ["the azure vault"] = 393279,         -- The Azure Vault
+  ["the blinding vale"] = 1286801,      -- The Blinding Vale
+  ["the dawnbreaker"] = 445414,         -- The Dawnbreaker
+  ["the everbloom"] = 159901,           -- The Everbloom
+  ["the necrotic wake"] = 354462,       -- The Necrotic Wake
+  ["the nokhud offensive"] = 393262,    -- The Nokhud Offensive
+  ["the rookery"] = 445443,             -- The Rookery
+  ["the stonevault"] = 445269,          -- The Stonevault
+  ["the underrot"] = 410074,            -- The Underrot
+  ["the vortex pinnacle"] = 410080,     -- The Vortex Pinnacle
+  ["theater of pain"] = 354467,         -- Theater of Pain
+  ["throne of the tides"] = 424142,     -- Throne of the Tides
+  ["uldaman legacy of tyr"] = 393222,   -- Uldaman: Legacy of Tyr
+  ["upper blackrock spire"] = 159902,   -- Upper Blackrock Spire
+  ["voidscar arena"] = 1286804,         -- Voidscar Arena
+  ["waycrest manor"] = 424167,          -- Waycrest Manor
+  ["windrunner spire"] = 1254400,       -- Windrunner Spire
 }
 
 local function normalizeDungeonName(name)
@@ -105,18 +173,18 @@ local function isSpellOwned(spellID)
   return false
 end
 
---- Bind every `TELEPORT_BY_MAPID` entry that the player actually owns
---- into the live lookup tables.
+--- Bind every teleport the player actually owns into the live lookups.
+--- Driven by the game's own challenge-map list, so the season's mapIDs
+--- are whatever the game says they are today.
 local function discoverTeleports()
   teleportByDungeonLower = {}
   teleportByMapID = {}
 
-  local dungeons = getChallengeDungeonNames()
-  for mapID, spellID in pairs(TELEPORT_BY_MAPID) do
-    if isSpellOwned(spellID) then
+  for mapID, dName in pairs(getChallengeDungeonNames()) do
+    local spellID = TELEPORT_BY_DUNGEON[dName]
+    if spellID and isSpellOwned(spellID) then
       teleportByMapID[mapID] = spellID
-      local dName = dungeons[mapID]
-      if dName then teleportByDungeonLower[dName] = spellID end
+      teleportByDungeonLower[dName] = spellID
     end
   end
 end
@@ -720,8 +788,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
     -- table KeyInfo's teleport-button discovery uses), so a successful
     -- teleport closes the box automatically.
     local _, _, spellID = ...
-    if spellID and TELEPORT_BY_MAPID then
-      for _, teleSpellID in pairs(TELEPORT_BY_MAPID) do
+    if spellID and TELEPORT_BY_DUNGEON then
+      for _, teleSpellID in pairs(TELEPORT_BY_DUNGEON) do
         if spellID == teleSpellID then
           hideKeyInfo()
           return
