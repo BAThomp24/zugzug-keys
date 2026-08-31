@@ -474,8 +474,12 @@ local function refreshTeleportButton()
     widget:SetHeight(FRAME_HEIGHT_NO_BUTTON)
   end
 
-  -- Keep the countdown fresh while the box is up and a cooldown runs.
-  if owned and remaining > 0 then
+  -- Keep polling while the box is up and we own the teleport at all --
+  -- NOT just while we believe a cooldown is running. A refresh taken
+  -- during a loading screen reads duration 0 (the client hasn't synced
+  -- cooldowns yet), which used to look like "ready" and cancel this
+  -- ticker, leaving a stale off-cooldown button until the box closed.
+  if owned then
     if not cdTicker then
       cdTicker = C_Timer.NewTicker(10, function()
         if widget and widget:IsShown() then
@@ -490,6 +494,39 @@ local function refreshTeleportButton()
     cdTicker:Cancel()
     cdTicker = nil
   end
+end
+
+--- Cooldown data is not trustworthy the instant a loading screen ends:
+--- GetSpellCooldown answers duration 0 until the server syncs, which
+--- reads as "off cooldown". One refresh on PLAYER_ENTERING_WORLD was
+--- therefore sampling exactly the wrong moment. Take several passes as
+--- the data settles instead of trusting the first answer.
+local settleTimers = {}
+local function refreshAfterLoadingScreen()
+  -- Drop any passes still pending from a previous load; zoning twice in
+  -- quick succession shouldn't stack two sets of timers.
+  for _, t in ipairs(settleTimers) do
+    if t and not t:IsCancelled() then t:Cancel() end
+  end
+  wipe(settleTimers)
+  for _, delay in ipairs({ 0, 1, 3, 6, 12 }) do
+    settleTimers[#settleTimers + 1] = C_Timer.NewTimer(delay, function()
+      pcall(refreshTeleportButton)
+    end)
+  end
+end
+
+--- SPELL_UPDATE_COOLDOWN fires on every global cooldown, so coalesce
+--- bursts into one refresh rather than rebuilding the button constantly.
+local refreshPending = false
+local function requestTeleportRefresh()
+  if refreshPending then return end
+  if not (widget and widget:IsShown()) then return end
+  refreshPending = true
+  C_Timer.After(0.5, function()
+    refreshPending = false
+    pcall(refreshTeleportButton)
+  end)
 end
 
 local function showSnapshot(snap)
@@ -636,11 +673,21 @@ local function isInTrackedInstance()
   if not saved then return false end
   local inInstance, instanceType = IsInInstance()
   if not (inInstance and instanceType == "party") then return false end
-  if saved.mapID then
-    local _, _, _, _, _, _, _, instanceMapID = GetInstanceInfo()
-    return instanceMapID == saved.mapID
+  local instanceName, _, _, _, _, _, _, instanceMapID = GetInstanceInfo()
+  -- LFG activity map ids and GetInstanceInfo's instance id are different
+  -- id spaces, so this equality almost never held and the box just never
+  -- went away. Keep it (it's exact when it does match) but fall back to
+  -- comparing the names, which is the same bridge the teleport lookup
+  -- already relies on.
+  if saved.mapID and instanceMapID and instanceMapID == saved.mapID then
+    return true
   end
-  -- No mapID stored → hide on any party instance entry as a fallback.
+  local here = normalizeDungeonName(instanceName or "")
+  local want = normalizeDungeonName(saved.dungeon or "")
+  if here ~= "" and want ~= "" then
+    return here == want or here:find(want, 1, true) ~= nil or want:find(here, 1, true) ~= nil
+  end
+  -- Nothing to compare on → hide on any party instance entry, as before.
   return true
 end
 
@@ -704,6 +751,15 @@ end
 -- catch up as soon as combat ends so a snapshot shown mid-combat can't
 -- keep a stale teleport bound.
 frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+-- Cooldowns sync after the loading screen, not during it. This is the
+-- event that tells us the teleport's real state has arrived.
+frame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+-- A zone change without a full loading screen (and the delayed area
+-- update after one) still wants a fresh look at both the cooldown and
+-- "am I in the key yet".
+frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+-- The key going live is the clearest possible "I'm here, close the box".
+frame:RegisterEvent("CHALLENGE_MODE_START")
 frame:SetScript("OnEvent", function(_, event, ...)
   if event == "PLAYER_LOGIN" then
     -- Discover M+ teleport spells lazily so a discovery failure can't
@@ -718,8 +774,32 @@ frame:SetScript("OnEvent", function(_, event, ...)
   end
 
   if event == "PLAYER_ENTERING_WORLD" then
-    if isInTrackedInstance() then hideKeyInfo() end
-    pcall(refreshTeleportButton)
+    if isInTrackedInstance() then
+      hideKeyInfo()
+      return
+    end
+    refreshAfterLoadingScreen()
+    return
+  end
+
+  if event == "ZONE_CHANGED_NEW_AREA" then
+    if isInTrackedInstance() then
+      hideKeyInfo()
+      return
+    end
+    requestTeleportRefresh()
+    return
+  end
+
+  if event == "CHALLENGE_MODE_START" then
+    -- The key has started, so whatever the box was reminding us about is
+    -- now moot regardless of which instance ids matched.
+    hideKeyInfo()
+    return
+  end
+
+  if event == "SPELL_UPDATE_COOLDOWN" then
+    requestTeleportRefresh()
     return
   end
 
