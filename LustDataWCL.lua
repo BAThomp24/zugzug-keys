@@ -5,7 +5,7 @@
 -- scripts/update-lustdata.ts. Do not edit by hand — hand-curated
 -- overrides belong in LustData.lua instead.
 --
--- Generated: 2026-11-19T16:38:16.580Z
+-- Generated: 2026-11-26T17:00:28.591Z
 --
 -- Call shapes (matched in-game by fuzzy boss-name comparison):
 --   { type = "boss", bossName = X }             lust on that boss engage
@@ -18,30 +18,30 @@ ZugZugKeysWclLustData = {
   ["Altar of Fangs"] = {
     runsAnalyzed = 5,
     keystoneLevels = "24/24/24/24/24",
-    generatedAt = "2026-11-19T16:38:16.580Z",
+    generatedAt = "2026-11-26T17:00:28.591Z",
     calls = {
       { type = "afterBoss", pullOffset = 1, support = 5, runsAnalyzed = 5, atMs = 22082 },
-      { type = "afterBoss", anchorBossName = "Rav'i", pullOffset = 1, support = 5, runsAnalyzed = 5, atMs = 701304 },
-      { type = "afterBoss", anchorBossName = "The Writhing Coil", pullOffset = 2, support = 5, runsAnalyzed = 5, atMs = 1406247 },
+      { type = "afterBoss", anchorBossName = "Rav'i", pullOffset = 1, support = 5, runsAnalyzed = 5, atMs = 705277 },
+      { type = "afterBoss", anchorBossName = "The Writhing Coil", pullOffset = 2, support = 3, runsAnalyzed = 5, atMs = 1414044 },
     },
     cohorts = {
       p1 = {
         runsAnalyzed = 98,
         keystoneLevels = "22",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 94, runsAnalyzed = 98, atMs = 24140 },
-          { type = "afterBoss", anchorBossName = "Rav'i", pullOffset = 1, support = 92, runsAnalyzed = 98, atMs = 652125 },
+          { type = "afterBoss", pullOffset = 1, support = 95, runsAnalyzed = 98, atMs = 23774 },
+          { type = "afterBoss", anchorBossName = "Rav'i", pullOffset = 1, support = 92, runsAnalyzed = 98, atMs = 650753 },
         },
       },
       p01 = {
-        runsAnalyzed = 100,
+        runsAnalyzed = 99,
         keystoneLevels = "23",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 97, runsAnalyzed = 100, atMs = 23159 },
-          { type = "afterBoss", anchorBossName = "Rav'i", pullOffset = 1, support = 93, runsAnalyzed = 100, atMs = 690756 },
-          { type = "afterBoss", anchorBossName = "The Writhing Coil", pullOffset = 2, support = 67, runsAnalyzed = 100, atMs = 1381011 },
+          { type = "afterBoss", pullOffset = 1, support = 98, runsAnalyzed = 99, atMs = 23094 },
+          { type = "afterBoss", anchorBossName = "Rav'i", pullOffset = 1, support = 95, runsAnalyzed = 99, atMs = 689448 },
+          { type = "afterBoss", anchorBossName = "The Writhing Coil", pullOffset = 2, support = 72, runsAnalyzed = 99, atMs = 1377598 },
         },
       },
     },
@@ -49,30 +49,31 @@ ZugZugKeysWclLustData = {
   ["Den of Nalorakk"] = {
     runsAnalyzed = 5,
     keystoneLevels = "24/24/24/24/24",
-    generatedAt = "2026-11-19T16:38:16.580Z",
+    generatedAt = "2026-11-26T17:00:28.591Z",
     calls = {
       { type = "afterBoss", pullOffset = 1, support = 5, runsAnalyzed = 5, atMs = 41985 },
-      { type = "afterBoss", anchorBossName = "The Hoardmonger", pullOffset = 2, support = 3, runsAnalyzed = 5, atMs = 674556 },
-      { type = "boss", bossName = "Nalorakk", support = 5, runsAnalyzed = 5, atMs = 1547347 },
+      { type = "afterBoss", anchorBossName = "The Hoardmonger", pullOffset = 3, support = 3, runsAnalyzed = 5, atMs = 836818 },
+      { type = "boss", bossName = "Nalorakk", support = 4, runsAnalyzed = 5, atMs = 1555132 },
     },
     cohorts = {
       p1 = {
         runsAnalyzed = 100,
         keystoneLevels = "22",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 98, runsAnalyzed = 100, atMs = 42904 },
-          { type = "afterBoss", anchorBossName = "The Hoardmonger", pullOffset = 2, support = 59, runsAnalyzed = 100, atMs = 658331 },
-          { type = "boss", bossName = "Nalorakk", support = 77, runsAnalyzed = 100, atMs = 1443704 },
+          { type = "afterBoss", pullOffset = 1, support = 96, runsAnalyzed = 100, atMs = 43539 },
+          { type = "afterBoss", anchorBossName = "The Hoardmonger", pullOffset = 2, support = 58, runsAnalyzed = 100, atMs = 658331 },
+          { type = "boss", bossName = "Nalorakk", support = 79, runsAnalyzed = 100, atMs = 1440839 },
         },
       },
       p01 = {
         runsAnalyzed = 100,
         keystoneLevels = "23",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 96, runsAnalyzed = 100, atMs = 42899 },
-          { type = "boss", bossName = "Nalorakk", support = 60, runsAnalyzed = 100, atMs = 1522153 },
+          { type = "afterBoss", pullOffset = 1, support = 96, runsAnalyzed = 100, atMs = 42726 },
+          { type = "afterBoss", anchorBossName = "The Hoardmonger", pullOffset = 2, support = 51, runsAnalyzed = 100, atMs = 680144 },
+          { type = "boss", bossName = "Nalorakk", support = 57, runsAnalyzed = 100, atMs = 1509960 },
         },
       },
     },
@@ -80,7 +81,7 @@ ZugZugKeysWclLustData = {
   ["King's Rest"] = {
     runsAnalyzed = 5,
     keystoneLevels = "24/24/24/24/24",
-    generatedAt = "2026-11-19T16:38:16.580Z",
+    generatedAt = "2026-11-26T17:00:28.591Z",
     calls = {
       { type = "afterBoss", pullOffset = 1, support = 5, runsAnalyzed = 5, atMs = 47225 },
       { type = "afterBoss", anchorBossName = "The Golden Serpent", pullOffset = 2, support = 4, runsAnalyzed = 5, atMs = 655844 },
@@ -91,20 +92,20 @@ ZugZugKeysWclLustData = {
       p1 = {
         runsAnalyzed = 100,
         keystoneLevels = "22",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 96, runsAnalyzed = 100, atMs = 49213 },
-          { type = "boss", bossName = "King Dazar", support = 84, runsAnalyzed = 100, atMs = 1672489 },
+          { type = "afterBoss", pullOffset = 1, support = 92, runsAnalyzed = 100, atMs = 49252 },
+          { type = "boss", bossName = "King Dazar", support = 86, runsAnalyzed = 100, atMs = 1676290 },
         },
       },
       p01 = {
         runsAnalyzed = 100,
         keystoneLevels = "23",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 92, runsAnalyzed = 100, atMs = 48704 },
-          { type = "boss", bossName = "The Council of Tribes", support = 52, runsAnalyzed = 100, atMs = 1258906 },
-          { type = "boss", bossName = "King Dazar", support = 91, runsAnalyzed = 100, atMs = 1849664 },
+          { type = "afterBoss", pullOffset = 1, support = 94, runsAnalyzed = 100, atMs = 48123 },
+          { type = "boss", bossName = "The Council of Tribes", support = 57, runsAnalyzed = 100, atMs = 1258753 },
+          { type = "boss", bossName = "King Dazar", support = 85, runsAnalyzed = 100, atMs = 1849057 },
         },
       },
     },
@@ -112,34 +113,34 @@ ZugZugKeysWclLustData = {
   ["Murder Row"] = {
     runsAnalyzed = 5,
     keystoneLevels = "24/24/24/24/24",
-    generatedAt = "2026-11-19T16:38:16.580Z",
+    generatedAt = "2026-11-26T17:00:28.591Z",
     calls = {
-      { type = "afterBoss", pullOffset = 1, support = 3, runsAnalyzed = 5, atMs = 16910 },
-      { type = "boss", bossName = "Zaen Bladesorrow", support = 3, runsAnalyzed = 5, atMs = 619419 },
-      { type = "boss", bossName = "Xathuux the Annihilator", support = 5, runsAnalyzed = 5, atMs = 1231612 },
-      { type = "boss", bossName = "Lithiel Cinderfury", support = 5, runsAnalyzed = 5, atMs = 1841882 },
+      { type = "afterBoss", pullOffset = 1, support = 4, runsAnalyzed = 5, atMs = 17680 },
+      { type = "boss", bossName = "Zaen Bladesorrow", support = 4, runsAnalyzed = 5, atMs = 623383 },
+      { type = "boss", bossName = "Xathuux the Annihilator", support = 5, runsAnalyzed = 5, atMs = 1240880 },
+      { type = "boss", bossName = "Lithiel Cinderfury", support = 4, runsAnalyzed = 5, atMs = 1855147 },
     },
     cohorts = {
       p1 = {
         runsAnalyzed = 99,
         keystoneLevels = "22",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 65, runsAnalyzed = 99, atMs = 20957 },
-          { type = "boss", bossName = "Zaen Bladesorrow", support = 55, runsAnalyzed = 99, atMs = 625031 },
-          { type = "boss", bossName = "Xathuux the Annihilator", support = 57, runsAnalyzed = 99, atMs = 1080023 },
-          { type = "boss", bossName = "Lithiel Cinderfury", support = 70, runsAnalyzed = 99, atMs = 1629916 },
+          { type = "afterBoss", pullOffset = 1, support = 64, runsAnalyzed = 99, atMs = 21108 },
+          { type = "boss", bossName = "Zaen Bladesorrow", support = 53, runsAnalyzed = 99, atMs = 626234 },
+          { type = "boss", bossName = "Xathuux the Annihilator", support = 50, runsAnalyzed = 99, atMs = 1058126 },
+          { type = "boss", bossName = "Lithiel Cinderfury", support = 78, runsAnalyzed = 99, atMs = 1616345 },
         },
       },
       p01 = {
         runsAnalyzed = 100,
         keystoneLevels = "23",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 78, runsAnalyzed = 100, atMs = 20163 },
-          { type = "boss", bossName = "Zaen Bladesorrow", support = 77, runsAnalyzed = 100, atMs = 624173 },
-          { type = "boss", bossName = "Xathuux the Annihilator", support = 95, runsAnalyzed = 100, atMs = 1226504 },
-          { type = "boss", bossName = "Lithiel Cinderfury", support = 64, runsAnalyzed = 100, atMs = 1828787 },
+          { type = "afterBoss", pullOffset = 1, support = 72, runsAnalyzed = 100, atMs = 20485 },
+          { type = "boss", bossName = "Zaen Bladesorrow", support = 70, runsAnalyzed = 100, atMs = 624755 },
+          { type = "boss", bossName = "Xathuux the Annihilator", support = 92, runsAnalyzed = 100, atMs = 1225501 },
+          { type = "boss", bossName = "Lithiel Cinderfury", support = 64, runsAnalyzed = 100, atMs = 1762446 },
         },
       },
     },
@@ -147,31 +148,31 @@ ZugZugKeysWclLustData = {
   ["Ruby Life Pools"] = {
     runsAnalyzed = 5,
     keystoneLevels = "24/24/24/24/24",
-    generatedAt = "2026-11-19T16:38:16.580Z",
+    generatedAt = "2026-11-26T17:00:28.591Z",
     calls = {
-      { type = "afterBoss", pullOffset = 1, support = 5, runsAnalyzed = 5, atMs = 21411 },
-      { type = "afterBoss", anchorBossName = "Melidrussa Chillworn", pullOffset = 1, support = 4, runsAnalyzed = 5, atMs = 650827 },
-      { type = "afterBoss", anchorBossName = "Kokia Blazehoof", pullOffset = 1, support = 4, runsAnalyzed = 5, atMs = 1302267 },
+      { type = "afterBoss", pullOffset = 1, support = 5, runsAnalyzed = 5, atMs = 21066 },
+      { type = "afterBoss", anchorBossName = "Melidrussa Chillworn", pullOffset = 1, support = 4, runsAnalyzed = 5, atMs = 632488 },
+      { type = "afterBoss", anchorBossName = "Kokia Blazehoof", pullOffset = 1, support = 4, runsAnalyzed = 5, atMs = 1294912 },
     },
     cohorts = {
       p1 = {
         runsAnalyzed = 100,
         keystoneLevels = "22",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 100, runsAnalyzed = 100, atMs = 24052 },
-          { type = "afterBoss", anchorBossName = "Melidrussa Chillworn", pullOffset = 1, support = 55, runsAnalyzed = 100, atMs = 627004 },
-          { type = "afterBoss", anchorBossName = "Kokia Blazehoof", pullOffset = 1, support = 61, runsAnalyzed = 100, atMs = 1229455 },
+          { type = "afterBoss", pullOffset = 1, support = 100, runsAnalyzed = 100, atMs = 23850 },
+          { type = "afterBoss", anchorBossName = "Melidrussa Chillworn", pullOffset = 1, support = 56, runsAnalyzed = 100, atMs = 626695 },
+          { type = "afterBoss", anchorBossName = "Kokia Blazehoof", pullOffset = 1, support = 62, runsAnalyzed = 100, atMs = 1228753 },
         },
       },
       p01 = {
         runsAnalyzed = 100,
         keystoneLevels = "23",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 98, runsAnalyzed = 100, atMs = 23295 },
-          { type = "afterBoss", anchorBossName = "Melidrussa Chillworn", pullOffset = 1, support = 71, runsAnalyzed = 100, atMs = 635667 },
-          { type = "afterBoss", anchorBossName = "Kokia Blazehoof", pullOffset = 1, support = 72, runsAnalyzed = 100, atMs = 1275258 },
+          { type = "afterBoss", pullOffset = 1, support = 98, runsAnalyzed = 100, atMs = 23422 },
+          { type = "afterBoss", anchorBossName = "Melidrussa Chillworn", pullOffset = 1, support = 69, runsAnalyzed = 100, atMs = 632184 },
+          { type = "afterBoss", anchorBossName = "Kokia Blazehoof", pullOffset = 1, support = 76, runsAnalyzed = 100, atMs = 1266269 },
         },
       },
     },
@@ -179,29 +180,29 @@ ZugZugKeysWclLustData = {
   ["Temple of Sethraliss"] = {
     runsAnalyzed = 5,
     keystoneLevels = "24/24/24/24/24",
-    generatedAt = "2026-11-19T16:38:16.580Z",
+    generatedAt = "2026-11-26T17:00:28.591Z",
     calls = {
       { type = "afterBoss", pullOffset = 1, support = 5, runsAnalyzed = 5, atMs = 23929 },
-      { type = "afterBoss", anchorBossName = "Adderis and Aspix", pullOffset = 1, support = 3, runsAnalyzed = 5, atMs = 626889 },
-      { type = "boss", bossName = "Galvazzt", support = 5, runsAnalyzed = 5, atMs = 1227310 },
+      { type = "afterBoss", anchorBossName = "Adderis and Aspix", pullOffset = 1, support = 4, runsAnalyzed = 5, atMs = 630766 },
+      { type = "boss", bossName = "Galvazzt", support = 5, runsAnalyzed = 5, atMs = 1231125 },
     },
     cohorts = {
       p1 = {
         runsAnalyzed = 100,
         keystoneLevels = "22",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 99, runsAnalyzed = 100, atMs = 24333 },
-          { type = "boss", bossName = "Avatar of Sethraliss", support = 67, runsAnalyzed = 100, atMs = 1597583 },
+          { type = "afterBoss", pullOffset = 1, support = 99, runsAnalyzed = 100, atMs = 24412 },
+          { type = "boss", bossName = "Avatar of Sethraliss", support = 67, runsAnalyzed = 100, atMs = 1591756 },
         },
       },
       p01 = {
         runsAnalyzed = 100,
         keystoneLevels = "23",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 98, runsAnalyzed = 100, atMs = 24194 },
-          { type = "afterBoss", anchorBossName = "Adderis and Aspix", pullOffset = 1, support = 68, runsAnalyzed = 100, atMs = 626553 },
+          { type = "afterBoss", pullOffset = 1, support = 97, runsAnalyzed = 100, atMs = 23956 },
+          { type = "afterBoss", anchorBossName = "Adderis and Aspix", pullOffset = 1, support = 72, runsAnalyzed = 100, atMs = 626339 },
           { type = "boss", bossName = "Galvazzt", support = 85, runsAnalyzed = 100, atMs = 1228919 },
         },
       },
@@ -210,31 +211,31 @@ ZugZugKeysWclLustData = {
   ["The Blinding Vale"] = {
     runsAnalyzed = 5,
     keystoneLevels = "24/24/24/24/24",
-    generatedAt = "2026-11-19T16:38:16.580Z",
+    generatedAt = "2026-11-26T17:00:28.591Z",
     calls = {
-      { type = "afterBoss", pullOffset = 1, support = 4, runsAnalyzed = 5, atMs = 32229 },
-      { type = "boss", bossName = "Ikuzz the Light Hunter", support = 4, runsAnalyzed = 5, atMs = 756971 },
-      { type = "boss", bossName = "Ziekett", support = 4, runsAnalyzed = 5, atMs = 1477815 },
+      { type = "afterBoss", pullOffset = 1, support = 5, runsAnalyzed = 5, atMs = 35312 },
+      { type = "boss", bossName = "Ikuzz the Light Hunter", support = 5, runsAnalyzed = 5, atMs = 752067 },
+      { type = "boss", bossName = "Ziekett", support = 5, runsAnalyzed = 5, atMs = 1474595 },
     },
     cohorts = {
       p1 = {
         runsAnalyzed = 100,
         keystoneLevels = "22",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 98, runsAnalyzed = 100, atMs = 33403 },
-          { type = "boss", bossName = "Ikuzz the Light Hunter", support = 97, runsAnalyzed = 100, atMs = 709987 },
-          { type = "boss", bossName = "Ziekett", support = 95, runsAnalyzed = 100, atMs = 1407798 },
+          { type = "afterBoss", pullOffset = 1, support = 99, runsAnalyzed = 100, atMs = 33650 },
+          { type = "boss", bossName = "Ikuzz the Light Hunter", support = 98, runsAnalyzed = 100, atMs = 708378 },
+          { type = "boss", bossName = "Ziekett", support = 97, runsAnalyzed = 100, atMs = 1402780 },
         },
       },
       p01 = {
         runsAnalyzed = 100,
         keystoneLevels = "23",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 98, runsAnalyzed = 100, atMs = 31886 },
-          { type = "boss", bossName = "Ikuzz the Light Hunter", support = 98, runsAnalyzed = 100, atMs = 735924 },
-          { type = "boss", bossName = "Ziekett", support = 97, runsAnalyzed = 100, atMs = 1464839 },
+          { type = "afterBoss", pullOffset = 1, support = 98, runsAnalyzed = 100, atMs = 32283 },
+          { type = "boss", bossName = "Ikuzz the Light Hunter", support = 98, runsAnalyzed = 100, atMs = 727616 },
+          { type = "boss", bossName = "Ziekett", support = 97, runsAnalyzed = 100, atMs = 1453346 },
         },
       },
     },
@@ -242,31 +243,31 @@ ZugZugKeysWclLustData = {
   ["Voidscar Arena"] = {
     runsAnalyzed = 5,
     keystoneLevels = "24/24/24/24/24",
-    generatedAt = "2026-11-19T16:38:16.580Z",
+    generatedAt = "2026-11-26T17:00:28.591Z",
     calls = {
-      { type = "afterBoss", pullOffset = 1, support = 5, runsAnalyzed = 5, atMs = 23689 },
-      { type = "boss", bossName = "Atroxus", support = 5, runsAnalyzed = 5, atMs = 834435 },
+      { type = "afterBoss", pullOffset = 1, support = 5, runsAnalyzed = 5, atMs = 23646 },
+      { type = "boss", bossName = "Atroxus", support = 5, runsAnalyzed = 5, atMs = 829784 },
       { type = "boss", bossName = "Charonus", support = 5, runsAnalyzed = 5, atMs = 1526908 },
     },
     cohorts = {
       p1 = {
         runsAnalyzed = 100,
         keystoneLevels = "22",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 97, runsAnalyzed = 100, atMs = 24646 },
-          { type = "boss", bossName = "Atroxus", support = 97, runsAnalyzed = 100, atMs = 770209 },
-          { type = "boss", bossName = "Charonus", support = 94, runsAnalyzed = 100, atMs = 1425466 },
+          { type = "afterBoss", pullOffset = 1, support = 97, runsAnalyzed = 100, atMs = 24688 },
+          { type = "boss", bossName = "Atroxus", support = 97, runsAnalyzed = 100, atMs = 766776 },
+          { type = "boss", bossName = "Charonus", support = 94, runsAnalyzed = 100, atMs = 1420963 },
         },
       },
       p01 = {
         runsAnalyzed = 100,
         keystoneLevels = "23",
-        generatedAt = "2026-11-19T16:38:16.580Z",
+        generatedAt = "2026-11-26T17:00:28.591Z",
         calls = {
-          { type = "afterBoss", pullOffset = 1, support = 100, runsAnalyzed = 100, atMs = 24428 },
-          { type = "boss", bossName = "Atroxus", support = 100, runsAnalyzed = 100, atMs = 804932 },
-          { type = "boss", bossName = "Charonus", support = 100, runsAnalyzed = 100, atMs = 1490786 },
+          { type = "afterBoss", pullOffset = 1, support = 98, runsAnalyzed = 100, atMs = 24428 },
+          { type = "boss", bossName = "Atroxus", support = 98, runsAnalyzed = 100, atMs = 802508 },
+          { type = "boss", bossName = "Charonus", support = 97, runsAnalyzed = 100, atMs = 1486405 },
         },
       },
     },
